@@ -21,7 +21,12 @@ Wants=network-online.target
 Type=simple
 User=charles
 Group=charles
-WorkingDirectory=/mnt/hf/shared/projects/m17_sdr_web/m17gismo
+# The program loads config.txt from its working directory, so it gets its own
+# runtime directory: the build directory ships upstream's sample config, which
+# has "mode gate" in it (a reflector gateway, which ignores the local
+# microphone and speaker completely).  Keeping them apart means the repository's
+# sample can never decide how the station runs.
+WorkingDirectory=/home/charles/m17web
 # The Pluto presents itself as a USB network interface: give it its address
 # before starting, and ignore failure if it is already configured.
 ExecStartPre=-/usr/bin/ip link set eth1 up

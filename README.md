@@ -228,6 +228,30 @@ Two things make the recovery work, and both were missing before:
 says so instead of fighting the service for port 8080 when the service is
 running.
 
+### Where its settings live
+
+The program loads `config.txt` from its **working directory**, so the service
+runs with `WorkingDirectory=/home/charles/m17web` and keeps its own `config.txt`
+there (`mode radio`, `sa G4GUO`, the frequencies).  The build directory keeps
+upstream's sample config, which has `mode gate` in it - a reflector gateway,
+which ignores the local microphone and speaker completely.  Running the service
+from the build directory therefore produced a station that looked alive, decoded
+frames, and had no voice path at all.
+
+### PulseAudio is stopped and masked on this Pi
+
+The recommended audio path talks to the card directly, and the daemon only ever
+competed for it: devices opening with "Device or resource busy" at start-up, and
+the microphone failing to open at key-down.  Both `pulseaudio` and `wireplumber`
+are disabled and masked in the user scope, so nothing restarts them.
+
+To get the `audio pulse` option back (see the audio section above):
+
+```bash
+systemctl --user unmask pulseaudio.socket pulseaudio.service wireplumber.service
+systemctl --user enable --now pulseaudio.service
+```
+
 ### Checking it is actually working
 
 The state in the web UI carries what you need to tell "silent" from "broken":
