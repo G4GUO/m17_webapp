@@ -1,0 +1,573 @@
+// webui.cpp
+//
+// Browser front end for m17web.  Implements the presentation API (ui.h) on top
+// of the small HTTP/WebSocket server in webserver.c:
+//
+//   * GET /            the single page UI (www/index.html or embedded assets)
+//   * WS  /ws          JSON state / command channel plus binary voice audio
+//
+// Wire protocol (WebSocket)
+//   server -> client   text   {"t":"state" | "log" | "resp" | "help" | "hello", ...}
+//                      binary [0x02][s16le PCM] decoded receive audio
+//   client -> server   text   an MMI command line ("rf 146400000"), or
+//                              {"cmd":"rf 146400000"}
+//                      binary [0x01][s16le PCM] microphone audio
+//
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <stdarg.h>
+#include <signal.h>
+#include <unistd.h>
+#include <time.h>
+#include <ctype.h>
+#include <pthread.h>
+
+#include "m17defines.h"
+#include "webserver.h"
+#include "audio.h"
+#include "ui.h"
+
+#define DEFAULT_WEB_PORT 8080
+#define LOG_LINES        200
+#define LOG_LEN          180
+#define STATE_MIN_MS     100
+#define AUDIO_TAG_MIC    0x01
+#define AUDIO_TAG_SPK    0x02
+
+#ifdef EMBED_WWW
+#include "www_assets.h"
+#else
+static const WsAsset m_embedded_none[] = { { NULL, NULL, NULL, 0 } };
+#endif
+
+// forward declarations
+static void help_send_all(void);
+static void send_refs(void);
+
+// ---------------------------------------------------------------------------
+// UI state mirrored for the browser
+// ---------------------------------------------------------------------------
+static int   m_port = DEFAULT_WEB_PORT;
+static char  m_www_dir[512] = "www";
+static void *m_srv;
+static int   m_srv_ok;
+
+static char  m_ptt[4]   = "RX";
+static char  m_mode[16] = "gate";
+static char  m_src[16]  = "        ";
+static char  m_dst[16]  = "        ";
+static char  m_gate[16] = "        ";
+static double m_signal, m_power;
+static bool  m_in_frame;
+// Written by the signal handler, read by the command loop in another thread:
+// must be volatile or the optimiser hoists the load out of the loop and the
+// program never exits.
+static volatile sig_atomic_t m_quit;
+
+static char  m_log[LOG_LINES][LOG_LEN];
+static int   m_log_count;      // total lines ever logged
+static pthread_mutex_t m_log_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+static long  m_last_state_ms;
+static long  m_frames_seen;
+
+// ---------------------------------------------------------------------------
+static long now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long)(ts.tv_sec * 1000L + ts.tv_nsec / 1000000L);
+}
+
+static void json_escape(const char *in, char *out, int len) {
+    int o = 0;
+    for (const char *p = in; *p && o < len - 8; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '"' || c == '\\') { out[o++] = '\\'; out[o++] = (char)c; }
+        else if (c == '\n') { out[o++] = '\\'; out[o++] = 'n'; }
+        else if (c == '\r') { out[o++] = '\\'; out[o++] = 'r'; }
+        else if (c == '\t') { out[o++] = '\\'; out[o++] = 't'; }
+        else if (c < 0x20) { o += snprintf(&out[o], len - o, "\\u%04x", c); }
+        else out[o++] = (char)c;
+    }
+    out[o] = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Log ring buffer
+// ---------------------------------------------------------------------------
+static void log_push(const char *line) {
+    pthread_mutex_lock(&m_log_mtx);
+    int slot = m_log_count % LOG_LINES;
+    snprintf(m_log[slot], LOG_LEN, "%s", line);
+    m_log_count++;
+    pthread_mutex_unlock(&m_log_mtx);
+}
+
+static void log_send(const char *kind, const char *fmt, ...) {
+    char line[LOG_LEN], esc[LOG_LEN * 2], msg[LOG_LEN * 3];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    log_push(line);
+    if (!m_srv) return;
+    json_escape(line, esc, sizeof(esc));
+    snprintf(msg, sizeof(msg), "{\"t\":\"log\",\"kind\":\"%s\",\"line\":\"%s\"}", kind, esc);
+    ws_broadcast_text(m_srv, msg);
+}
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+static const char *mode_name(CircuitType c) {
+    switch (c) {
+        case ASTOAS: return "loop";
+        case ARTOAS: return "fm-radio";
+        case DRTOAS: return "radio";
+        case ASTODN: return "client";
+        case ARTODN: return "fm-client";
+        case DRTODN: return "gate";
+        default:     return "?";
+    }
+}
+
+static void decode_addr(uint48_t a, char *out, int len) {
+    char tmp[16];
+    m17_decode_call(a, tmp);
+    int i = 0;
+    // trim trailing spaces
+    for (int k = 0; k < 9 && tmp[k] && i < len - 1; k++) out[i++] = tmp[k];
+    while (i > 0 && out[i-1] == ' ') i--;
+    out[i] = 0;
+}
+
+static void build_state(char *out, int len) {
+    const M17_Dbase *db = m17_get_db();
+    char mode[24];
+    snprintf(mode, sizeof(mode), "%s", m_mode[0] ? m_mode : mode_name(db->chan_type));
+
+    char ref[16] = "";
+    m17_net_ref_address(ref);
+
+    // The reflector module is only set once connected; %c of a NUL byte would
+    // make the JSON unparseable.
+    char mod = m17_net_ref_module();
+    if (mod < 0x20 || mod > 0x7E) mod = '-';
+
+    // Gateway callsign straight from the database (set from config.txt)
+    char gate[16];
+    snprintf(gate, sizeof(gate), "%s", db->tx_gate_add);
+    for (int i = (int)strlen(gate) - 1; i >= 0 && (gate[i] == ' ' || gate[i] < 0x20); i--)
+        gate[i] = 0;
+
+    snprintf(out, len,
+        "{\"t\":\"state\","
+        "\"radio\":\"%s\","
+        "\"mode\":\"%s\","
+        "\"ptt\":\"%s\","
+        "\"src\":\"%s\",\"dst\":\"%s\",\"gate\":\"%s\","
+        "\"rx_freq\":%llu,\"tx_freq\":%llu,"
+        "\"rx_gain\":%.3f,\"tx_gain\":%.3f,"
+        "\"fc\":%.6f,"
+        "\"afc\":%s,"
+        "\"listen_all\":%s,"
+        "\"in_frame\":%s,"
+        "\"signal\":%.3f,\"power\":%.3f,"
+        "\"frames\":%u,\"gerr\":%u,"
+        "\"ref\":{\"name\":\"%s\",\"module\":\"%c\",\"connected\":%s},"
+        "\"audio\":\"%s\","
+        "\"mic_level\":%.3f,\"spk_level\":%.3f,"
+        "\"clients\":%d,"
+        "\"rx_stream\":%lu,"
+        "\"uptime\":%ld}",
+        radio_name(),
+        mode,
+        m_ptt,
+        m_src, m_dst, gate,
+        (unsigned long long)db->rx_freq, (unsigned long long)db->tx_freq,
+        radio_get_rx_gain(), radio_get_tx_gain(),
+        radio_get_freq_correction(),
+        radio_get_afc_status() ? "true" : "false",
+        db->listen_flag ? "true" : "false",
+        (m_in_frame || db->in_frame) ? "true" : "false",
+        m_signal, m_power,
+        db->n_frames, db->g_errors,
+        ref, mod, m17_net_connected() ? "true" : "false",
+        audio_backend_name(audio_get_backend()),
+        audio_get_mic_level(), audio_get_spk_level(),
+        m_srv ? ws_client_count(m_srv) : 0,
+        (unsigned long)(db->n_frames - m_frames_seen),
+        (long)(now_ms() / 1000));
+}
+
+static void push_state(void) {
+    if (!m_srv || ws_client_count(m_srv) == 0) return;
+    // Throttle: the RX path calls us up to 25 times a second, which is far more
+    // than a browser needs.  The tick callback guarantees a refresh anyway.
+    long now = now_ms();
+    if (m_last_state_ms != 0 && (now - m_last_state_ms) < STATE_MIN_MS) return;
+    char st[1600];
+    build_state(st, sizeof(st));
+    ws_broadcast_text(m_srv, st);
+    const M17_Dbase *db = m17_get_db();
+    m_frames_seen = db->n_frames;
+    m_last_state_ms = now;
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket callbacks (run on the web server thread)
+// ---------------------------------------------------------------------------
+static void send_hello(int id) {
+    if (!m_srv) return;
+    const char *hello = "{\"t\":\"hello\",\"app\":\"m17web\",\"proto\":1,"
+                        "\"audio_tag_mic\":1,\"audio_tag_spk\":2,\"rate\":8000}";
+    ws_send_text(m_srv, id, hello);
+
+    // Help text
+    char msg[4096];
+    int o = snprintf(msg, sizeof(msg), "{\"t\":\"help\",\"lines\":[");
+    const char *const *h = ui_help_lines();
+    for (int i = 0; h[i] && o < (int)sizeof(msg) - 128; i++) {
+        char esc[LOG_LEN * 2];
+        json_escape(h[i], esc, sizeof(esc));
+        o += snprintf(&msg[o], sizeof(msg) - o, "%s\"%s\"", i ? "," : "", esc);
+    }
+    snprintf(&msg[o], sizeof(msg) - o, "]}");
+    ws_send_text(m_srv, id, msg);
+
+    // Log backlog
+    pthread_mutex_lock(&m_log_mtx);
+    int n = m_log_count < LOG_LINES ? m_log_count : LOG_LINES;
+    int start = m_log_count - n;
+    for (int i = 0; i < n; i++) {
+        char esc[LOG_LEN * 2], msg2[LOG_LEN * 3];
+        json_escape(m_log[(start + i) % LOG_LINES], esc, sizeof(esc));
+        snprintf(msg2, sizeof(msg2), "{\"t\":\"log\",\"kind\":\"old\",\"line\":\"%s\"}", esc);
+        ws_send_text(m_srv, id, msg2);
+    }
+    pthread_mutex_unlock(&m_log_mtx);
+
+    char st[1600];
+    build_state(st, sizeof(st));
+    ws_send_text(m_srv, id, st);
+}
+
+static void web_on_open(const WsClientInfo *ci, void *user) {
+    (void)user;
+    log_send("info", "client connected: %s", ci->peer);
+    send_hello(ci->id);
+}
+
+static void web_on_close(int id, void *user) {
+    (void)user;
+    log_send("info", "client %d disconnected", id);
+}
+
+// Pull "cmd":"..." out of a JSON object without a full parser
+static int extract_cmd(const char *in, char *out, int len) {
+    const char *p = strstr(in, "\"cmd\"");
+    if (!p) return -1;
+    p = strchr(p, ':');
+    if (!p) return -1;
+    p++;
+    while (*p == ' ') p++;
+    if (*p != '"') return -1;
+    p++;
+    int o = 0;
+    while (*p && *p != '"' && o < len - 1) {
+        if (*p == '\\' && p[1]) p++;
+        out[o++] = *p++;
+    }
+    out[o] = 0;
+    return 0;
+}
+
+static void run_command(const char *cmd_in) {
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "%s", cmd_in);
+
+    // strip whitespace
+    int n = (int)strlen(cmd);
+    while (n > 0 && isspace((unsigned char)cmd[n-1])) cmd[--n] = 0;
+    char *s = cmd;
+    while (*s && isspace((unsigned char)*s)) s++;
+    if (!*s) return;
+
+    // Web-only conveniences
+    if (strcasecmp(s, "q") == 0 || strcasecmp(s, "quit") == 0) {
+        log_send("info", "quit requested by browser");
+        m17_txrx_disable();
+        gui_update();
+        m_quit = true;
+        return;
+    }
+    if (strcasecmp(s, "refs") == 0) {
+        send_refs();
+        return;
+    }
+    if (strcasecmp(s, "b") == 0 || strcasecmp(s, "break") == 0) {
+        m17_txrx_ptt_off();
+        gui_cmd_resp("OK");
+        gui_update();
+        return;
+    }
+    if (strcasecmp(s, "clients") == 0) {
+        log_send("info", "%d client(s) connected", m_srv ? ws_client_count(m_srv) : 0);
+        gui_cmd_resp("OK");
+        return;
+    }
+
+    mmi_parse(cmd);
+    gui_update();
+}
+
+//
+// The reflector list comes from M17Hosts.txt (designator + address), the same
+// file m17_net.cpp uses to resolve a reflector by name.
+//
+static void send_refs(void) {
+    if (!m_srv) return;
+    char msg[8192];
+    int o = snprintf(msg, sizeof(msg), "{\"t\":\"refs\",\"names\":[");
+    FILE *fp = fopen("M17Hosts.txt", "r");
+    int first = 1;
+    if (fp) {
+        char line[256];
+        while (fgets(line, sizeof(line), fp)) {
+            char *p = line;
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p == '#' || *p == '\n' || *p == 0) continue;
+            char name[32];
+            if (sscanf(p, "%31s", name) != 1) continue;
+            if (o > (int)sizeof(msg) - 64) break;
+            o += snprintf(&msg[o], sizeof(msg) - o, "%s\"%s\"", first ? "" : ",", name);
+            first = 0;
+        }
+        fclose(fp);
+    }
+    snprintf(&msg[o], sizeof(msg) - o, "]}");
+    ws_broadcast_text(m_srv, msg);
+}
+
+static void web_on_msg(int id, int is_binary, const uint8_t *data, int len, void *user) {
+    (void)id; (void)user;
+    if (is_binary) {
+        if (len > 1 && data[0] == AUDIO_TAG_MIC) {
+            int n = (len - 1) / 2;
+            audio_web_mic_push((const int16_t *)(data + 1), n);
+        }
+        return;
+    }
+    char cmd[256];
+    const char *txt = (const char *)data;
+    if (len > 0 && txt[0] == '{') {
+        if (extract_cmd(txt, cmd, sizeof(cmd)) == 0) run_command(cmd);
+        return;
+    }
+    int n = len < (int)sizeof(cmd) - 1 ? len : (int)sizeof(cmd) - 1;
+    memcpy(cmd, data, n);
+    cmd[n] = 0;
+    run_command(cmd);
+}
+
+static void web_on_tick(void *user) {
+    (void)user;
+    if (!m_srv) return;
+    if (m_last_state_ms == 0 || (now_ms() - m_last_state_ms) >= 250) push_state();
+}
+
+// ---------------------------------------------------------------------------
+// Audio sink used by the browser back end
+// ---------------------------------------------------------------------------
+void webui_audio_to_browser(const int16_t *s, int len) {
+    if (!m_srv || len <= 0) return;
+    if (ws_client_count(m_srv) == 0) return;
+    static uint8_t buf[1 + 2048];
+    int maxsamples = (int)(sizeof(buf) - 1) / 2;
+    int off = 0;
+    while (off < len) {
+        int chunk = len - off;
+        if (chunk > maxsamples) chunk = maxsamples;
+        buf[0] = AUDIO_TAG_SPK;
+        memcpy(buf + 1, s + off, (size_t)chunk * 2);
+        ws_broadcast_bin(m_srv, buf, 1 + chunk * 2);
+        off += chunk;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Presentation API
+// ---------------------------------------------------------------------------
+void ui_set_web_port(int port) { m_port = port; }
+int  ui_get_web_port(void) { return m_port; }
+void ui_set_www_dir(const char *dir) {
+    if (dir && dir[0]) snprintf(m_www_dir, sizeof(m_www_dir), "%s", dir);
+}
+const char *ui_get_www_dir(void) { return m_www_dir; }
+
+UiBackend ui_backend(void) { return UI_BACKEND_WEB; }
+
+void gui_open(void) {
+    WsConfig cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.port = m_port;
+    cfg.www_dir = m_www_dir;
+#ifdef EMBED_WWW
+    cfg.assets = www_assets;
+#else
+    cfg.assets = m_embedded_none;
+#endif
+    cfg.on_open  = web_on_open;
+    cfg.on_close = web_on_close;
+    cfg.on_msg   = web_on_msg;
+    cfg.on_tick  = web_on_tick;
+    cfg.tick_ms  = 200;
+    m_srv = ws_start(&cfg);
+    if (m_srv) {
+        m_srv_ok = 1;
+        printf("m17web: web UI on http://0.0.0.0:%d/  (assets: %s%s)\n",
+               m_port, m_www_dir, access(m_www_dir, R_OK) == 0 ? "" : " [not found, using embedded assets]");
+        log_send("info", "m17web started, web UI on port %d", m_port);
+    } else {
+        fprintf(stderr, "m17web: failed to start the web server on port %d\n", m_port);
+        log_send("err", "web server failed to start on port %d", m_port);
+    }
+}
+
+void gui_close(void) {
+    if (m_srv) {
+        ws_stop(m_srv);
+        m_srv = NULL;
+    }
+    m_srv_ok = 0;
+}
+
+void gui_update(void) { push_state(); }
+
+void gui_update_clear(void) {
+    pthread_mutex_lock(&m_log_mtx);
+    m_log_count = 0;
+    pthread_mutex_unlock(&m_log_mtx);
+    if (m_srv) ws_broadcast_text(m_srv, "{\"t\":\"clear\"}");
+}
+
+void gui_los(void) {
+    m_in_frame = false;
+    log_send("rx", "loss of signal");
+    push_state();
+}
+
+void gui_aos(void) {
+    m_in_frame = true;
+    push_state();
+}
+
+void gui_cmd_prompt(void) { }
+
+void gui_cmd_resp(const char *resp) {
+    char line[LOG_LEN];
+    snprintf(line, sizeof(line), "%s", resp ? resp : "");
+    int n = (int)strlen(line);
+    while (n > 0 && (line[n-1] == '\n' || line[n-1] == '\r' || line[n-1] == ' ')) line[--n] = 0;
+    log_push(line);
+    if (m_srv) {
+        char esc[LOG_LEN * 2], msg[LOG_LEN * 3];
+        json_escape(line, esc, sizeof(esc));
+        snprintf(msg, sizeof(msg), "{\"t\":\"resp\",\"line\":\"%s\"}", esc);
+        ws_broadcast_text(m_srv, msg);
+    } else {
+        printf("%s\n", line);
+    }
+}
+
+void gui_help(void) { help_send_all(); }
+
+// (kept separate so gui_help and the connect message share one implementation)
+static void help_send_all(void) {
+    if (!m_srv) return;
+    char msg[4096];
+    int o = snprintf(msg, sizeof(msg), "{\"t\":\"help\",\"lines\":[");
+    const char *const *h = ui_help_lines();
+    for (int i = 0; h[i] && o < (int)sizeof(msg) - 128; i++) {
+        char esc[LOG_LEN * 2];
+        json_escape(h[i], esc, sizeof(esc));
+        o += snprintf(&msg[o], sizeof(msg) - o, "%s\"%s\"", i ? "," : "", esc);
+    }
+    snprintf(&msg[o], sizeof(msg) - o, "]}");
+    ws_broadcast_text(m_srv, msg);
+}
+
+void gui_bar(double v) { gui_signal(v); }
+
+void gui_signal(double v) {
+    m_signal = v;
+    push_state();
+}
+
+void gui_power(double v) {
+    m_power = v;
+}
+
+void gui_char(char c) { (void)c; }
+
+void gui_save_src_address(uint48_t add) {
+    decode_addr(add, m_src, sizeof(m_src));
+    log_send("rx", "src %s", m_src);
+    push_state();
+}
+
+void gui_save_dest_address(uint48_t add) {
+    decode_addr(add, m_dst, sizeof(m_dst));
+    push_state();
+}
+
+void gui_save_mode(const char *mode) {
+    snprintf(m_mode, sizeof(m_mode), "%s", mode ? mode : "");
+    // keep the JSON clean whatever the caller hands us
+    for (int i = 0; m_mode[i]; i++)
+        if (m_mode[i] == '\n' || m_mode[i] == '\r' || m_mode[i] == '\t') m_mode[i] = ' ';
+    push_state();
+}
+
+void gui_tx(void) {
+    snprintf(m_ptt, sizeof(m_ptt), "TX");
+    push_state();
+}
+
+void gui_rx(void) {
+    snprintf(m_ptt, sizeof(m_ptt), "RX");
+    push_state();
+}
+
+void gui_dp(void) {
+    snprintf(m_ptt, sizeof(m_ptt), "DX");
+    push_state();
+}
+
+// ---------------------------------------------------------------------------
+// Command/quit loop
+// ---------------------------------------------------------------------------
+static void on_signal(int sig) {
+    (void)sig;
+    m_quit = true;
+    m17_txrx_disable();
+}
+
+void *ui_command_loop(void *arg) {
+    (void)arg;
+    signal(SIGINT, on_signal);
+    signal(SIGTERM, on_signal);
+    log_send("info", "web UI ready: http://<this host>:%d/", m_port);
+    while (!m_quit) {
+        usleep(100 * 1000);
+        if (access(m_www_dir, R_OK) != 0) {
+            // keep serving embedded assets; nothing to do
+        }
+    }
+    // Give the browser a chance to see the shutdown message
+    log_send("info", "shutting down");
+    usleep(150 * 1000);
+    return arg;
+}

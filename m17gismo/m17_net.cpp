@@ -398,3 +398,10 @@ void m17_net_close(void)
 	}
 }
 
+
+//
+// Module character of the reflector we are connected to ('A'..'Z')
+//
+char m17_net_ref_module(void){
+	return m_mod;
+}

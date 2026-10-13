@@ -11,7 +11,14 @@
 // Size of decimating filter in receiver
 #define DF5_FN 71
 
-typedef enum{RADIO_TYPE_PLUTO,RADIO_TYPE_LIME}RadioType;
+typedef enum{RADIO_TYPE_PLUTO,RADIO_TYPE_LIME,RADIO_TYPE_SIM}RadioType;
+
+// Simulated radio (radio_sim.cpp), selected with -r sim
+const char *radio_name(void);
+RadioType   radio_get_type(void);
+double      radio_get_tx_gain(void);
+double      radio_get_rx_gain(void);
+double      radio_get_freq_correction(void);
 
 // Length of preamble in samples
 #define N_SAMPLES 1920
@@ -252,7 +259,6 @@ void audio_mic_open(void);
 void audio_mic_close(void);
 void audio_spk_open(void);
 void audio_spk_close(void);
-
 //
 // Puncture / De puncture routines
 //
@@ -391,6 +397,7 @@ void m17_txrx_ptt_off(void);
 void m17_txrx_ptt_duplex(void);
 void m17_txrx_enable(void);
 void m17_txrx_disable(void);
+void m17_txrx_listen_all( bool b );
 // Send a carrier
 void m17_txrx_ptt_carrier(void);
 
@@ -452,30 +459,19 @@ bool rpi_read_ptt(void);
 int rpi_gpio_open(void);
 void rpi_gpio_close(void);
 
-// Ncurses GUI
-void gui_open(void);
-void gui_close(void);
-void gui_update(void);
-void gui_update_clear(void);
-void gui_los(void);
-void gui_aos(void);
-void gui_cmd_prompt(void);
-void gui_cmd_resp(const char *resp);
-void gui_help(void);
-void gui_bar(double v);
-void gui_char(char c);
-void gui_save_src_address(uint48_t add);
-void gui_save_dest_address(uint48_t add);
-void gui_save_mode(const char *mode);
-void gui_tx(void);
-void gui_rx(void);
-void gui_dp(void);
+// Presentation layer: web UI (webui.cpp) or ncurses console (ui_console.cpp).
+// See ui.h for the whole interface, including ui_command_loop().
+#include "ui.h"
+
+// Audio routing (browser / PulseAudio / file)
+#include "audio.h"
 
 // Network
 int  m17_net_open(void);
 void m17_net_close(void);
 bool m17_net_connected(void);
 void m17_net_ref_address(char *name);
+char m17_net_ref_module(void);
 
 // Name = Reflector name
 // IP_ADDR = Address of reflector

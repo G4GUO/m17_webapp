@@ -1,0 +1,352 @@
+// m17web browser front end
+//
+// Talks to the m17web binary over one WebSocket:
+//   text frames   JSON state / commands / log lines
+//   binary frames [0x02][s16le PCM]  receive audio (server -> browser)
+//                 [0x01][s16le PCM]  microphone audio (browser -> server)
+//
+'use strict';
+
+const $ = (id) => document.getElementById(id);
+const RATE = 8000;                 // voice sample rate of the M17 codec path
+const TAG_SPK = 2, TAG_MIC = 1;
+
+let ws = null;
+let reconnectDelay = 500;
+let st = {};                       // last state message
+let audioReady = false;
+let txHeld = false;
+
+// ---------------------------------------------------------------------------
+// WebSocket plumbing
+// ---------------------------------------------------------------------------
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws`);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    reconnectDelay = 500;
+    $('link').textContent = 'online';
+    $('link').className = 'link on';
+    $('pttbtn').disabled = false;
+  };
+  ws.onclose = () => {
+    $('link').textContent = 'offline';
+    $('link').className = 'link off';
+    $('pttbtn').disabled = true;
+    setTimeout(connect, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 8000);
+  };
+  ws.onerror = () => { /* onclose follows */ };
+  ws.onmessage = (ev) => {
+    if (typeof ev.data === 'string') handleJson(ev.data);
+    else handleBinary(new Uint8Array(ev.data));
+  };
+}
+
+function send(text) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(text); }
+function cmd(text) { send(text); }
+
+function handleJson(txt) {
+  let m;
+  try { m = JSON.parse(txt); } catch (e) { return; }
+  switch (m.t) {
+    case 'state': applyState(m); break;
+    case 'log': addLog(m.kind, m.line); break;
+    case 'resp': addLog('resp', m.line); break;
+    case 'help': $('help').textContent = (m.lines || []).join('\n'); break;
+    case 'clear': $('log').innerHTML = ''; break;
+    case 'refs': fillRefs(m.names || []); break;
+    case 'hello': addLog('info', 'connected to ' + (m.app || 'm17web') + ' (protocol ' + m.proto + ')'); break;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// State rendering
+// ---------------------------------------------------------------------------
+function setIfIdle(el, value) {
+  if (document.activeElement === el) return;
+  el.value = value;
+}
+
+function applyState(s) {
+  st = s;
+  $('radio').textContent = s.radio || '-';
+  $('mode').textContent = s.mode || '-';
+  $('audiobackend').textContent = s.audio || '-';
+  $('clients').textContent = s.clients ?? 0;
+
+  const led = $('pttled');
+  led.textContent = s.ptt || 'RX';
+  led.className = 'led' + (s.ptt === 'TX' ? ' tx' : s.ptt === 'DX' ? ' dx' : '');
+
+  const fi = $('frameind');
+  fi.textContent = s.in_frame ? 'in frame' : 'no signal';
+  fi.className = 'badge' + (s.in_frame ? ' sig' : '');
+
+  $('signalbar').value = s.signal || 0;
+  $('powerbar').value = s.power || 0;
+  $('micbar').value = s.mic_level || 0;
+  $('spkbar').value = s.spk_level || 0;
+
+  setIfIdle($('src'), (s.src || '').trim());
+  setIfIdle($('dst'), (s.dst || '').trim());
+  setIfIdle($('gate'), (s.gate || '').trim());
+  $('listenall').checked = !!s.listen_all;
+
+  setIfIdle($('rxfreq'), s.rx_freq || 0);
+  setIfIdle($('txfreq'), s.tx_freq || 0);
+  if (document.activeElement !== $('rggain')) {
+    $('rggain').value = s.rx_gain;
+    $('rggainout').textContent = Number(s.rx_gain).toFixed(2);
+  }
+  if (document.activeElement !== $('tggain')) {
+    $('tggain').value = s.tx_gain;
+    $('tggainout').textContent = Number(s.tx_gain).toFixed(2);
+  }
+  setIfIdle($('fc'), s.fc || 1);
+  $('afc').checked = !!s.afc;
+
+  if (s.ref) {
+    const rs = $('refstatus');
+    rs.textContent = s.ref.connected ? `connected to ${s.ref.name}-${s.ref.module}` : 'not connected';
+    rs.className = 'badge' + (s.ref.connected ? ' ok' : '');
+  }
+
+  if (document.activeElement !== $('audioselect')) $('audioselect').value = s.audio || 'browser';
+  $('simrow').style.display = (s.radio === 'sim') ? 'flex' : 'none';
+}
+
+function fillRefs(names) {
+  const sel = $('refname');
+  const cur = sel.value;
+  sel.innerHTML = '';
+  for (const n of names) {
+    const o = document.createElement('option');
+    o.value = n; o.textContent = n;
+    sel.appendChild(o);
+  }
+  if (cur) sel.value = cur;
+}
+
+// ---------------------------------------------------------------------------
+// Log
+// ---------------------------------------------------------------------------
+const MAXLOG = 500;
+function addLog(kind, line) {
+  const log = $('log');
+  const d = document.createElement('div');
+  d.className = 'k-' + (kind || 'info');
+  const t = new Date().toLocaleTimeString();
+  d.textContent = `[${t}] ${line}`;
+  log.appendChild(d);
+  while (log.childElementCount > MAXLOG) log.removeChild(log.firstChild);
+  log.scrollTop = log.scrollHeight;
+  $('logcount').textContent = log.childElementCount + ' lines';
+}
+
+// ---------------------------------------------------------------------------
+// Controls
+// ---------------------------------------------------------------------------
+function wire() {
+  // PTT button + space bar
+  const btn = $('pttbtn');
+  const down = (e) => { e.preventDefault(); if (!txHeld) { txHeld = true; btn.classList.add('live'); cmd('tx'); } };
+  const up = (e) => { if (txHeld) { txHeld = false; btn.classList.remove('live'); cmd('rx'); flushMic(); } };
+  btn.addEventListener('pointerdown', down);
+  btn.addEventListener('pointerup', up);
+  btn.addEventListener('pointerleave', up);
+  btn.addEventListener('pointercancel', up);
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' && !e.repeat && !isTyping(e.target)) down(e);
+  });
+  window.addEventListener('keyup', (e) => { if (e.code === 'Space' && !isTyping(e.target)) up(e); });
+
+  $('breakbtn').onclick = () => { txHeld = false; $('pttbtn').classList.remove('live'); cmd('b'); };
+  $('carrierbtn').onclick = () => cmd('tc');
+  $('duplexbtn').onclick = () => cmd('td');
+
+  $('src').onchange = (e) => cmd('sa ' + e.target.value);
+  $('dst').onchange = (e) => cmd('da ' + e.target.value);
+  $('gate').onchange = (e) => cmd('ga ' + e.target.value);
+  $('listenall').onchange = (e) => cmd('la ' + (e.target.checked ? 'on' : 'off'));
+
+  $('freqapply').onclick = () => {
+    cmd('rf ' + Math.round($('rxfreq').value));
+    cmd('tf ' + Math.round($('txfreq').value));
+    cmd('fc ' + $('fc').value);
+  };
+  $('rggain').oninput = (e) => { $('rggainout').textContent = Number(e.target.value).toFixed(2); };
+  $('rggain').onchange = (e) => cmd('rg ' + e.target.value);
+  $('tggain').oninput = (e) => { $('tggainout').textContent = Number(e.target.value).toFixed(2); };
+  $('tggain').onchange = (e) => cmd('tg ' + e.target.value);
+  $('afc').onchange = (e) => cmd('afc ' + (e.target.checked ? 'on' : 'off'));
+
+  $('simloop').onchange = (e) => cmd('sim loop ' + (e.target.checked ? 'on' : 'off'));
+  $('simrt').onchange = (e) => cmd('sim realtime ' + (e.target.checked ? 'on' : 'off'));
+  $('simnoise').onchange = (e) => cmd('sim noise ' + e.target.value);
+
+  $('connbtn').onclick = () => {
+    const name = $('refname').value || 'M17';
+    const mod = ($('refmod').value || 'C').toUpperCase().slice(0, 1);
+    cmd(`conn ${name} ${mod}`);
+  };
+  $('discbtn').onclick = () => cmd('disc');
+
+  $('cmdform').onsubmit = (e) => {
+    e.preventDefault();
+    const v = $('cmdinput').value.trim();
+    if (v) { cmd(v); $('cmdinput').value = ''; }
+  };
+
+  document.querySelectorAll('button[data-cmd]').forEach((b) => {
+    b.onclick = () => cmd(b.dataset.cmd);
+  });
+
+  $('audioselect').onchange = (e) => cmd('audio ' + e.target.value);
+  $('audioenable').onclick = () => startAudio();
+  $('volume').oninput = (e) => { if (audio.outGain) audio.outGain.gain.value = e.target.value; };
+  $('mute').onchange = (e) => { if (audio.outGain) audio.outGain.gain.value = e.target.checked ? 0 : $('volume').value; };
+
+  cmd('refs');
+}
+
+function isTyping(el) {
+  return el && (el.tagName === 'INPUT' || el.tagName === 'SELECT' || el.tagName === 'TEXTAREA');
+}
+
+// ---------------------------------------------------------------------------
+// Audio (WebAudio <-> 8 kHz PCM over the WebSocket)
+// ---------------------------------------------------------------------------
+const audio = {
+  ctx: null, outGain: null, micNode: null, spkNode: null,
+  stream: null, queue: [], queued: 0, playing: false, lastMicLevel: 0,
+};
+
+class Downsampler {
+  // box-filter decimation from ctxRate to 8 kHz
+  constructor(inRate, outRate) {
+    this.step = inRate / outRate;
+    this.acc = 0; this.sum = 0; this.n = 0; this.out = [];
+  }
+  process(float32) {
+    for (let i = 0; i < float32.length; i++) {
+      this.sum += float32[i]; this.n++;
+      this.acc += 1;
+      if (this.acc >= this.step) {
+        const v = Math.max(-1, Math.min(1, this.sum / Math.max(1, this.n)));
+        this.out.push(v < 0 ? v * 0x8000 : v * 0x7FFF);
+        this.acc -= this.step; this.sum = 0; this.n = 0;
+      }
+    }
+    const a = this.out; this.out = [];
+    return a;
+  }
+}
+
+class Upsampler {
+  // linear interpolation from 8 kHz to the context rate
+  constructor(inRate, outRate) {
+    this.step = inRate / outRate;
+    this.pos = 0; this.buf = [];
+  }
+  push(int16) {
+    for (let i = 0; i < int16.length; i++) this.buf.push(int16[i] / 32768);
+  }
+  pull(out) {
+    const n = out.length;
+    for (let i = 0; i < n; i++) {
+      if (this.buf.length < 2) { out[i] = 0; continue; }
+      const idx = Math.floor(this.pos);
+      if (idx >= this.buf.length - 1) {
+        this.buf = [this.buf[this.buf.length - 1]];
+        this.pos = 0;
+        out[i] = 0;
+        continue;
+      }
+      const f = this.pos - idx;
+      out[i] = this.buf[idx] * (1 - f) + this.buf[idx + 1] * f;
+      this.pos += this.step;
+      const drop = Math.floor(this.pos);
+      if (drop > 0) { this.buf.splice(0, drop); this.pos -= drop; }
+    }
+  }
+}
+
+let down = null, up = null;
+
+async function startAudio() {
+  if (audioReady) { await audio.ctx.resume(); return; }
+  try {
+    audio.ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+    await audio.ctx.resume();
+    const rate = audio.ctx.sampleRate;
+    down = new Downsampler(rate, RATE);
+    up = new Upsampler(RATE, rate);
+
+    audio.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    });
+    const src = audio.ctx.createMediaStreamSource(audio.stream);
+    audio.outGain = audio.ctx.createGain();
+    audio.outGain.gain.value = $('mute').checked ? 0 : $('volume').value;
+    audio.outGain.connect(audio.ctx.destination);
+
+    // microphone -> 8 kHz -> websocket
+    audio.micNode = audio.ctx.createScriptProcessor(1024, 1, 1);
+    const pending = [];
+    audio.micNode.onaudioprocess = (ev) => {
+      const s = down.process(ev.inputBuffer.getChannelData(0));
+      // The passthrough buffer must be silent: we never monitor ourselves
+      for (let i = 0; i < ev.outputBuffer.numberOfChannels; i++)
+        ev.outputBuffer.getChannelData(i).fill(0);
+      if ($('mute').checked) return;
+      let rms = 0;
+      for (let i = 0; i < s.length; i++) rms += s[i] * s[i];
+      audio.lastMicLevel = Math.min(1, Math.sqrt(rms / Math.max(1, s.length)) / 32768 * 3);
+      if (st.ptt === 'RX' || !ws || ws.readyState !== WebSocket.OPEN) return;   // only while transmitting
+      for (let i = 0; i < s.length; i++) pending.push(s[i]);
+      while (pending.length >= 160) {
+        const frame = new Int16Array(161);
+        frame[0] = TAG_MIC;
+        for (let i = 0; i < 160; i++) frame[i + 1] = pending.shift();
+        ws.send(frame.buffer);
+      }
+    };
+    src.connect(audio.micNode);
+    audio.micNode.connect(audio.ctx.destination); // sink so the node runs; buffer stays silent
+
+    // 8 kHz -> speaker
+    audio.spkNode = audio.ctx.createScriptProcessor(2048, 0, 1);
+    const outBuf = new Float32Array(2048);
+    audio.spkNode.onaudioprocess = (ev) => {
+      up.pull(outBuf);
+      ev.outputBuffer.getChannelData(0).set(outBuf);
+    };
+    audio.spkNode.connect(audio.outGain);
+
+    audioReady = true;
+    $('audioenable').disabled = true;
+    $('audionote').textContent = `browser audio running at ${rate} Hz (device) / ${RATE} Hz (M17)`;
+    addLog('info', 'browser audio enabled');
+  } catch (err) {
+    addLog('err', 'audio failed: ' + err.message +
+      ' (needs https or localhost, and microphone permission)');
+  }
+}
+
+let micFlush = [];
+function flushMic() { micFlush = []; }
+
+function handleBinary(u8) {
+  if (u8.length < 3 || u8[0] !== TAG_SPK) return;
+  const n = (u8.length - 1) >> 1;
+  const pcm = new Int16Array(n);
+  for (let i = 0; i < n; i++) pcm[i] = (u8[1 + i * 2] | (u8[2 + i * 2] << 8)) << 16 >> 16;
+  if (up) up.push(pcm);
+}
+
+// ---------------------------------------------------------------------------
+connect();
+wire();

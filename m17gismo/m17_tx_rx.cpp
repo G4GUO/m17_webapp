@@ -16,7 +16,8 @@ static int16_t m_aspksamples[160];
 static scmplx  m_rsamples[1920];
 static M17Type m_type;
 static uint8_t m_meta[14];
-static bool m_running;
+// Set from other threads (mmi / web UI): volatile so loops actually re-read it
+static volatile bool m_running;
 static NetState m_net_state = STATE_RX;
 
 void m17_txrx_spkr_audio( uint8_t *data ){

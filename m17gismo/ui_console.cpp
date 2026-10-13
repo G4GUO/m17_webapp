@@ -1,7 +1,17 @@
+//
+// ui_console.cpp
+//
+// Original ncurses terminal front end (upstream gui.cpp), kept as an optional
+// build (-DCONSOLE=1) alongside the web UI.  It implements the same
+// presentation API as webui.cpp (see ui.h).
+//
 #include <ncurses.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdio.h>
+#include <unistd.h>
 #include "m17defines.h"
+#include "ui.h"
 
 #define DISPLAY_WIDTH     80
 #define MODE_LINE         0
@@ -25,6 +35,9 @@ static char m_mode[15];
 
 static int m_tx_rx;
 static int m_last_bar;
+static volatile bool m_running = true;
+
+UiBackend ui_backend(void) { return UI_BACKEND_CONSOLE; }
 
 int center_offset(const char *txt ){
 	int x = strlen(txt);
@@ -90,25 +103,9 @@ void gui_help(void){
     move(HELP_LINE,0);
     attrset(COLOR_PAIR(1));
 	printw("\n");
-	printw("tf nnnnnnnnn (set transmit frequency in Hz)\n");
-	printw("rf nnnnnnnnn (set receive  frequency in Hz)\n");
-	printw("tg           (transmit gain {0 - 1.0})\n");
-	printw("rg           (receive gain  {0 - 1.0})\n");
-	printw("fc           (frequency correction {0.9 - 1.1})\n");
-	printw("afc          (Auto Freq Control {on | off} )\n");
-	printw("load file    (load a config file)\n");
-	printw("tx           (transmit in simplex)\n");
-	printw("td           (transmit in duplex)\n");
-	printw("tc           (transmit carrier)\n");
-	printw("rx           (receive)\n");
-	printw("sa xxxxxxxxx (source  address (len <= 9))\n");
-	printw("ga xxxxxxxxx (gateway address (len <= 9))\n");
-	printw("da xxxxxxxxx (destination address (len <= 9)))\n");
-	printw("ba           (destination broadcast)\n");
-	printw("conn M17 C   (connect to M17-M17 reflector module C)\n");
-	printw("disc         (disconnect from current reflector)\n");
-	printw("q            (quit)\n");
-	printw("h            (help)\n");
+	const char *const *h = ui_help_lines();
+	for( int i = 0; h[i]; i++)
+	    printw("%s\n", h[i]);
     attroff(COLOR_PAIR(1));
     gui_cmd_prompt();
 }
@@ -155,10 +152,8 @@ void gui_status_line(void){
 	display_tx_rx();
 }
 void gui_update(void){
-//	int x;
 	char call[15];
 	const M17_Dbase *db = m17_get_db();
-//	clear();
 	gui_status_line();
 
 	// Destination Address
@@ -227,6 +222,8 @@ void gui_bar(double v){
 	}
 	m_last_bar = m;
 }
+void gui_signal(double v){ gui_bar(v); }
+void gui_power(double v){ }
 void gui_los(void){
 	clear_callsigns();
     gui_cmd_prompt();
@@ -259,4 +256,46 @@ void gui_rx(void){
 void gui_dp(void){
 	m_tx_rx = DP;
 	gui_update();
+}
+
+//
+// Command loop: read commands from the keyboard (this is the bit the web UI
+// replaces with the WebSocket command channel).
+//
+static char *mfgets(char *b, int n, FILE *fp){
+	int i = 0;
+	int r;
+	for(;;){
+		if((r=getch())!= EOF){
+			b[i++] = (char)r&0xFF;
+			b[i] = 0;
+			gui_char((char)r&0xFF);
+			if(r == '\n')  return b;
+			if(i >= n - 1) return b;
+		}
+	}
+	return b;
+}
+
+void *ui_command_loop(void *arg){
+	char cmd[80];
+	gui_cmd_prompt();
+	while(m_running == true){
+		usleep(10);
+		if((mfgets(cmd,80,stdin))!= NULL){
+			if(cmd[0] == 'q'){
+				m17_txrx_disable();
+				m_running = false;
+			}else{
+				if(strncmp(cmd,"load",4)==0){
+					cmd[strlen(cmd)-1] = 0;// remove line ending
+					mmi_load_file(&cmd[5]);
+				}else{
+				    mmi_parse(cmd);
+				}
+			}
+			gui_cmd_prompt();
+		}
+	}
+	return arg;
 }

@@ -1,0 +1,6 @@
+m17gismo/*.o
+m17gismo/m17web
+m17gismo/m17gismo
+m17gismo/www_assets.h
+*.raw
+__pycache__/

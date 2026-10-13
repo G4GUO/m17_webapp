@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <ctype.h>
 #include "m17defines.h"
+#ifdef HAVE_SIM
+#include "radio_sim.h"
+#endif
 
 void help(void){
 	gui_help();
@@ -22,6 +25,15 @@ void mmi_parse(char *cmd){
 	int nt = 0;
 	bool valid = false;
 	char *token[10];
+
+	// Drop trailing line endings and whitespace: the tokeniser only splits on
+	// spaces, so "radio\n" from config.txt used to become a bad token value.
+	int cl = (int)strlen(cmd);
+	while(cl > 0 && (cmd[cl-1] == '\n' || cmd[cl-1] == '\r' ||
+	                 cmd[cl-1] == ' '  || cmd[cl-1] == '	'))
+		cmd[--cl] = 0;
+	if(cl == 0) return;
+
 	token[nt] = strtok(cmd," ");
 	while(token[nt] != NULL){
 		if( ++nt == 10 ) break;
@@ -207,6 +219,44 @@ void mmi_parse(char *cmd){
 		m17_net_disconnect_from_reflector();
 		valid = true;
 	}
+
+	// Audio routing: browser (web UI), pulse (local sound card), file, both, none
+	if(strncmp(token[0],"audio",5)==0){
+		if(nt == 2){
+			audio_set_backend(audio_parse_backend(token[1]));
+			valid = true;
+		}
+	}
+
+	// Listen to all addresses (not just ours and the broadcast address)
+	if(strncmp(token[0],"la",2)==0){
+		if(nt == 2){
+			bool on = (strncmp(token[1],"on",2)==0)||(strncmp(token[1],"all",3)==0);
+			m17_txrx_listen_all(on);
+			valid = true;
+		}
+	}
+
+	// Stop transmitting
+	if(strncmp(token[0],"b",1)==0){
+		m17_txrx_ptt_off();
+		valid = true;
+	}
+
+#ifdef HAVE_SIM
+	// Simulated radio controls: sim loop on|off, sim realtime on|off, sim noise 0.01
+	if(strncmp(token[0],"sim",3)==0){
+		if(nt == 3){
+			if(strncmp(token[1],"loop",4)==0)
+				sim_set_loopback(strncmp(token[2],"on",2)==0);
+			if(strncmp(token[1],"realtime",8)==0)
+				sim_set_realtime(strncmp(token[2],"on",2)==0);
+			if(strncmp(token[1],"noise",5)==0)
+				sim_set_noise(atof(token[2]));
+			valid = true;
+		}
+	}
+#endif
 
 	// Help
 	if(strncmp(token[0],"h",1)==0){
