@@ -14,6 +14,8 @@ upstream's own; everything front-end related is new.
     |  . console + log       |               |  . Codec2 3200 voice      |
     +------------------------+               +---------------------------+
 
+**User manual:** [docs/m17web-user-manual.pdf](docs/m17web-user-manual.pdf) — a 12-page guide written for the operator rather than the developer: setting it up, making a contact, the audio options, the controls, the commands, troubleshooting and a quick reference. The text lives in `docs/user_manual.py`, which regenerates the PDF (needs `reportlab`).
+
 ## What changed relative to upstream
 
 | Area | Upstream | Here |
