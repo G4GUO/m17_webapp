@@ -181,12 +181,39 @@ bool cfg_ad9361_streaming_ch(struct iio_context *ctx, struct stream_cfg *cfg, en
 	return true;
 }
 
+//
+// Transmit chunking.
+//
+// The modulator hands over one 1920 sample block (5 ms at 384 kS/s) at a time,
+// and each iio_buffer_push is a USB transfer that costs a millisecond or two
+// whatever its size.  Pushing eight of them per 40 ms M17 sub frame spent more
+// than half the frame's budget on USB overhead, so the transmit loop could not
+// produce a 40 ms frame in 40 ms: it ran ~17% slow, which starves the DAC
+// (repeated samples at the far end) and overflows the microphone ring.
+//
+// So the samples are accumulated and pushed in whole 40 ms sub frames, into a
+// buffer deep enough (with the kernel buffers) to keep the DAC fed across the
+// gap between pushes.  15360 samples is exactly one M17 sub frame - 384000 /
+// 8000 = 48, 8 x 1920 - so the chunking stays aligned with the audio and symbol
+// rates and cannot drift.
+//
+#define TX_CHUNK_SAMPLES 15360              // 40 ms at 384 kS/s = one M17 sub frame
+static scmplx m_tx_acc[TX_CHUNK_SAMPLES];
+static int m_tx_acc_n;
+static scmplx *m_tx_buff_ptr;
+
+void pluto_tx_flush(void) {
+	m_tx_acc_n = 0;
+}
+
 void pluto_set_tx_buff_length(uint32_t len) {
+	(void)len;                              // the chunk size governs, not the caller's block
 	// Change the size of the buffer
 	if (m_txbuf) { iio_buffer_destroy(m_txbuf); m_txbuf = NULL; }
-	m_txbuf = iio_device_create_buffer( m_tx, len, false);
-	scmplx *s_b = (scmplx*)iio_buffer_first(m_txbuf, m_tx0_i);
-	memset(s_b, 0, sizeof(scmplx)*len);
+	m_txbuf = iio_device_create_buffer( m_tx, TX_CHUNK_SAMPLES, false);
+	m_tx_buff_ptr = (scmplx*)iio_buffer_first(m_txbuf, m_tx0_i);
+	memset(m_tx_buff_ptr, 0, sizeof(scmplx)*TX_CHUNK_SAMPLES);
+	m_tx_acc_n = 0;
 	iio_buffer_set_blocking_mode(m_txbuf, true);
 }
 void pluto_set_rx_buff_length(uint32_t len) {
@@ -446,11 +473,21 @@ void pluto_agc_type(AgcType type){
 //
 void pluto_tx_samples( scmplx *s, int len) {
 	if (m_pluto_running == false) return;
-	if (len == 0) return;
-	// Get position of first sample in the buffer
-	scmplx *s_b = (scmplx*)iio_buffer_first(m_txbuf, m_tx0_i);
-	memcpy(s_b, s, sizeof(scmplx)*len);
-	iio_buffer_push(m_txbuf);
+	if (len <= 0) return;
+	// Accumulate into whole 40 ms sub frames; see TX_CHUNK_SAMPLES above.
+	while (len > 0) {
+		int take = TX_CHUNK_SAMPLES - m_tx_acc_n;
+		if (take > len) take = len;
+		memcpy(&m_tx_acc[m_tx_acc_n], s, sizeof(scmplx)*(size_t)take);
+		m_tx_acc_n += take;
+		s += take;
+		len -= take;
+		if (m_tx_acc_n >= TX_CHUNK_SAMPLES) {
+			memcpy(m_tx_buff_ptr, m_tx_acc, sizeof(scmplx)*TX_CHUNK_SAMPLES);
+			iio_buffer_push(m_txbuf);
+			m_tx_acc_n = 0;
+		}
+	}
 }
 //
 // returns the number of samples received

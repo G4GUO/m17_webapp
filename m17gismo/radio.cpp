@@ -142,6 +142,9 @@ void radio_close(void){
 }
 void radio_transmit(void){
 	m_keyed = true;
+#ifdef HAVE_PLUTO
+	if( m_radio_type == RADIO_TYPE_PLUTO ) pluto_tx_flush();   // start the over clean
+#endif
 #ifdef HAVE_LIME
 	if( m_radio_type == RADIO_TYPE_LIME ){
 	    lime_got_to_transmit();

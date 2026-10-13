@@ -208,6 +208,8 @@ static void build_state(char *out, int len) {
                  (audio_get_backend() == AUDIO_ALSA) ? audio_backend_error() : "");
     o = json_add(out, len, o, ",\"mic_level\":%.3f,\"spk_level\":%.3f",
                  audio_get_mic_level(), audio_get_spk_level());
+    o = json_add(out, len, o, ",\"tx_lead\":%d,\"tx_drops\":%ld,\"tx_overruns\":%ld",
+                 m17_tx_lead_frames(), audio_tx_dropped(), audio_tx_overruns());
     o = json_add(out, len, o, ",\"clients\":%d", m_srv ? ws_client_count(m_srv) : 0);
     o = json_add(out, len, o, ",\"rx_stream\":%lu", (unsigned long)(db->n_frames - m_frames_seen));
     o = json_add(out, len, o, ",\"uptime\":%ld}", (long)(now_ms() / 1000));

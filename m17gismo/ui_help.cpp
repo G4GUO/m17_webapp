@@ -27,6 +27,7 @@ static const char *const help_lines[] = {
 	"mode gate       M17 radio <-> reflector gateway",
 	"mode client     local audio <-> reflector",
 	"audio browser   voice via the web browser (default)",
+	"lead N          blank codec frames sent before the voice (default 4)",
 	"audio alsa      voice via the Pi sound card, direct ALSA",
 	"audio alsa DEV  ...on a specific device, e.g. audio alsa plughw:3,0",
 	"audio pulse     voice via the Pi sound card through PulseAudio",

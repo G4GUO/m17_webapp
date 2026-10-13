@@ -100,6 +100,12 @@
       </label>
       <p class="note" id="audiostatus">checking the Pi sound card&hellip;</p>
       <div class="row">
+        <label class="lbl">blank frames before voice
+          <input id="leadframes" type="number" min="0" max="50" step="2" value="4" style="width:5em">
+        </label>
+        <span class="lbl" id="txdrops">0 dropped samples</span>
+      </div>
+      <div class="row">
         <button id="audioenable">enable browser audio</button>
         <span class="lbl" id="audiopending"></span>
       </div>

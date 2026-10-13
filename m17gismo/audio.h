@@ -41,6 +41,7 @@ void audio_mic_close(void);
 void audio_spk_open(void);
 void audio_spk_close(void);
 void audio_input(int16_t *s, int len);          // blocks until len samples or timeout
+void audio_pace_reset(void);                    // restart real-time pacing (key-down)
 void audio_output(int16_t *s, int len);
 void audio_input_flush(void);
 void audio_output_flush(void);
@@ -59,6 +60,12 @@ bool           audio_have_alsa(void);
 bool           audio_local_ready(void);
 const char    *audio_local_device(void);   // e.g. plughw:3,0 for the ALSA path
 bool           audio_have_browser_audio(void);
+// Transmit-health counters for the active backend: samples of microphone audio
+// lost (card overrun, or padded with silence because the source starved) and
+// the number of card overruns behind them.  These make transmit dropouts
+// visible instead of silent.
+long           audio_tx_dropped(void);
+long           audio_tx_overruns(void);
 
 // ---- ALSA back end (audio_alsa.cpp, needs -lasound) ----------------------
 void audio_alsa_mic_open(void);
@@ -69,6 +76,8 @@ void audio_alsa_input(int16_t *s, int len);
 void audio_alsa_output(int16_t *s, int len);
 void audio_alsa_flush(void);
 bool audio_alsa_ready(void);
+long audio_alsa_overruns(void);
+long audio_alsa_starved(void);
 const char *audio_alsa_error(void);
 const char *audio_alsa_device(void);
 void audio_alsa_set_device(const char *dev);
@@ -92,6 +101,8 @@ void audio_web_spk_close(void);
 void audio_web_mic_push(const int16_t *s, int len);   // from the WebSocket client
 int  audio_web_mic_available(void);
 int  audio_web_input(int16_t *s, int len);            // returns samples delivered
+long audio_web_mic_starved(void);                     // samples padded with silence
+void audio_web_mic_flush(void);                       // drop pre-transmission audio
 void audio_web_output(int16_t *s, int len);           // forwarded to the browser
 bool audio_web_active(void);
 

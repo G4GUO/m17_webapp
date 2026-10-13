@@ -1,7 +1,9 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <math.h>
 #include <unistd.h>
 #include <memory.h>
+#include <pthread.h>
 #include "m17defines.h"
 // codec2 (or the modified codec through codec2mod/codec2_shim.h) is included by
 // m17defines.h according to CODEC2_BACKEND.
@@ -20,6 +22,59 @@ static uint8_t m_meta[14];
 // Set from other threads (mmi / web UI): volatile so loops actually re-read it
 static volatile bool m_running;
 static NetState m_net_state = STATE_RX;
+// Blank (silence) codec frames sent at the start of every transmission, see
+// m17_tx_lead_in().  Even numbers only: two codec frames make one M17 sub frame.
+static int m_tx_lead_frames = 4;              // 80 ms
+static pthread_mutex_t m_lead_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+int  m17_tx_lead_frames(void) { return m_tx_lead_frames; }
+void m17_tx_set_lead_frames(int frames) {
+    if (frames < 0) frames = 0;
+    if (frames > 50) frames = 50;             // 1 s of silence is plenty
+    pthread_mutex_lock(&m_lead_mtx);
+    m_tx_lead_frames = frames;
+    pthread_mutex_unlock(&m_lead_mtx);
+}
+
+//
+// Leading silence.  A receiver has to acquire bit sync, the LICH and the link
+// setup frame before a stream frame means anything, and at key-down the local
+// microphone path is only just starting: a USB card takes tens of ms to hand
+// over its first samples, and a browser adds a round trip.  Without this the
+// first voice frames went out as gap, which sounds like the transmitter
+// dropping samples.  Sending a couple of blank codec frames first moves that
+// gap into the silence and gives the microphone buffers time to fill.
+//
+static void m17_tx_lead_in_ex(bool to_net){
+    int frames = m17_tx_lead_frames();
+    if (frames < 2) return;
+    frames &= ~1;                             // whole sub frames only
+    int16_t silence[160];
+    uint8_t payload[16];
+    memset(silence, 0, sizeof(int16_t) * (size_t)m_nsam);
+    while (frames > 0) {
+        memset(payload, 0, sizeof(payload));
+        codec2_encode(m_codec2, &payload[0], silence);
+        codec2_encode(m_codec2, &payload[8], silence);
+        if (to_net) m17_send_stream_frame_to_net(payload);
+        else        m17_send_stream_frame(payload);
+        radio_power_update();
+#ifdef M17WEB_DIAG
+        fprintf(stdout, "diag-tx: lead-in blank frame payload=%02X%02X%02X%02X%02X%02X%02X%02X"
+                        " (%d left) net=%d\n", payload[0], payload[1], payload[2], payload[3],
+                payload[4], payload[5], payload[6], payload[7], frames - 2, to_net ? 1 : 0);
+        fflush(stdout);
+#endif
+        // Real time, so the microphone has the same time to fill as the stream
+        // takes to play: the point is to hide the start-up gap, not to send
+        // silence as fast as the CPU can encode it.
+        usleep(40000);
+        frames -= 2;
+    }
+}
+
+static void m17_tx_lead_in(void)         { m17_tx_lead_in_ex(false); }
+static void m17_tx_lead_in_to_net(void)  { m17_tx_lead_in_ex(true); }
 
 void m17_txrx_spkr_audio( uint8_t *data ){
 
@@ -99,18 +154,52 @@ void *m17_txrx_thread(void *arg){
 		    m17_send_preamble();
 		    // Send link setup
 		    m17_send_link_setup_frame(m17_db_get_dst(), m17_db_get_src(), m_type, m_meta);
+		    // A couple of blank codec frames before the voice (see m17_tx_lead_in)
+		    m17_tx_lead_in();
+		    // Everything the microphone captured while the radio was starting up
+		    // is now stale: send live audio from here (see audio_input_flush).
+		    audio_input_flush();
 		    // Send sub frames of voice, 25 sub frames per sec
 		    while((m_ptt == PTT_TX)&&(m_running == true)){
+#ifdef M17WEB_DIAG
+			    struct timespec d0, d1, d2, d3, d4;
+			    static long t_audio, t_encode, t_send, t_pow, t_total, n_sub;
+			    clock_gettime(CLOCK_MONOTONIC, &d0);
+#endif
 			    // Read Audio samples and encode using Codec 2
 			    // Audio blocks are 20 ms but M17 chunks are 40 ms so 2 codec frames per m17 sub frame
 			    audio_input(m_amicsamples, m_nsam);
+#ifdef M17WEB_DIAG
+			    clock_gettime(CLOCK_MONOTONIC, &d1);
+#endif
 			    codec2_encode(m_codec2, &payload[0], m_amicsamples);
 			    // Read Audio samples and encode using Codec 2
 			    audio_input(m_amicsamples, m_nsam);
 			    codec2_encode(m_codec2, &payload[8], m_amicsamples);
+#ifdef M17WEB_DIAG
+			    clock_gettime(CLOCK_MONOTONIC, &d2);
+#endif
 			    // Send Sub frame
 			    m17_send_stream_frame( payload );
+#ifdef M17WEB_DIAG
+			    clock_gettime(CLOCK_MONOTONIC, &d3);
+#endif
 			    radio_power_update();
+#ifdef M17WEB_DIAG
+			    clock_gettime(CLOCK_MONOTONIC, &d4);
+			    t_audio  += (d1.tv_sec - d0.tv_sec) * 1000000 + (d1.tv_nsec - d0.tv_nsec) / 1000;
+			    t_encode += (d2.tv_sec - d1.tv_sec) * 1000000 + (d2.tv_nsec - d1.tv_nsec) / 1000;
+			    t_send   += (d3.tv_sec - d2.tv_sec) * 1000000 + (d3.tv_nsec - d2.tv_nsec) / 1000;
+			    t_pow    += (d4.tv_sec - d3.tv_sec) * 1000000 + (d4.tv_nsec - d3.tv_nsec) / 1000;
+			    t_total  += (d4.tv_sec - d0.tv_sec) * 1000000 + (d4.tv_nsec - d0.tv_nsec) / 1000;
+			    if ((++n_sub % 25) == 0) {
+			        fprintf(stdout, "diag-tx: %ld sub frames: audio(incl pace)=%ldus encode=%ldus"
+			                        " send+radio=%ldus power=%ldus total=%ldus (40000us = real time)\n",
+			                n_sub, t_audio / 25, t_encode / 25, t_send / 25, t_pow / 25, t_total / 25);
+			        fflush(stdout);
+			        t_audio = t_encode = t_send = t_pow = t_total = 0;
+			    }
+#endif
 		    }
 		    // Send EOT
 		    m17_send_eot();
@@ -133,6 +222,11 @@ void *m17_txrx_thread(void *arg){
 		    m17_send_preamble();
 		    // Send link setup
 		    m17_send_link_setup_frame(m17_db_get_dst(), m17_db_get_src(), m_type, m_meta);
+		    // A couple of blank codec frames before the voice (see m17_tx_lead_in)
+		    m17_tx_lead_in();
+		    // Everything the microphone captured while the radio was starting up
+		    // is now stale: send live audio from here (see audio_input_flush).
+		    audio_input_flush();
 		    // Send sub frames of voice, 25 sub frames per sec
 		    while((m_ptt == PTT_DP)&&(m_running == true)){
 			    // Read Audio samples and encode using Codec 2
@@ -205,6 +299,9 @@ void *m17_txrx_client_thread(void *arg){
 		    audio_mic_open();
 		    // Send link setup
 		    m17_send_link_setup_frame_to_net(m17_db_get_dst(), m17_db_get_src(), m_type, m_meta);
+		    // A couple of blank codec frames before the voice (see m17_tx_lead_in)
+		    m17_tx_lead_in_to_net();
+		    audio_input_flush();
 		    // Send sub frames of voice, 25 sub frames per sec
 		    while((m_ptt == PTT_TX)&&(m_running == true)){
 			    // Read Audio samples and encode using Codec 2
@@ -343,6 +440,10 @@ void m17_txrx_disable(void){
 }
 // Init this module
 void m17_txrx_init(void){
+    // Optional default for the blank frames sent before the voice: "tx lead 6"
+    // (or M17WEB_TX_LEAD=6) for a longer run-in on a slow microphone.
+    const char *env = getenv("M17WEB_TX_LEAD");
+    if (env && env[0]) m17_tx_set_lead_frames(atoi(env));
 	m_codec2 = codec2_create(CODEC2_MODE_3200);
 	if (m_codec2 == NULL) {
 		// Silently continuing would transmit empty payloads that a receiver

@@ -200,6 +200,7 @@ void pluto_read_rssi_value(long long int *rssi);
 
 uint32_t pluto_rx_samples( scmplx *s );
 void pluto_tx_samples( scmplx *s, int len);
+void pluto_tx_flush(void);          // drop the transmit accumulator (start of an over)
 
 void pluto_transmit(void);
 void pluto_receive(void);
@@ -406,6 +407,12 @@ void m17_txrx_disable(void);
 void m17_txrx_listen_all( bool b );
 // Send a carrier
 void m17_txrx_ptt_carrier(void);
+// Blank (silence) codec frames transmitted before the voice at key-down, in
+// codec frames: 2 frames = one M17 sub frame = 40 ms.  Hides the receiver's
+// acquisition and the local microphone's start-up, which otherwise appear as
+// transmit dropouts.  Default 4 (80 ms), 0 disables.
+int  m17_tx_lead_frames(void);
+void m17_tx_set_lead_frames(int frames);
 
 // PRBS9
 void m17_prbs9_tx_load(uint8_t *out, int len);

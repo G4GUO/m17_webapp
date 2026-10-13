@@ -130,6 +130,67 @@ log lines, command responses, help text and the reflector list; binary frames
 for audio, tagged `0x01` + s16le PCM (8 kHz mono) for the microphone and `0x02`
 + PCM for decoded receive audio.
 
+## Transmit samples used to be dropped: the rates and the fix
+
+The transmit path is fed by frames, so its rates and its timing budget both
+matter.  On the Pluto the whole chain is an exact integer division of the
+AD9361's clock - there is no fractional resampling anywhere:
+
+| stage | rate | ratio to the next |
+|---|---|---|
+| AD9361 sampling_frequency | 3 072 000 S/s | /8 in the AD9361 |
+| Pluto stream (`cf-ad9361-lpc`) | 384 000 S/s | /48 |
+| voice audio (codec2 3200) | 8 000 Hz | x6 (ALSA plug, card does 48 kHz) |
+| M17 symbols | 4 800 sym/s | x80 = 384 000 (`radio_get_oversample()`) |
+| modulator block `N_SAMPLES` | 1 920 samples | x8 = 15 360 = one 40 ms sub frame |
+
+384000/8000 = 48, 48000/8000 = 6, 384000/48000 = 8, 4800 x 80 = 384000, and
+1920 x 8 = 15360 samples = exactly one 40 ms M17 sub frame = 2 codec frames.
+The ratio being integral means chunking can be aligned to whole audio frames and
+cannot drift - it does not mean the two crystals are locked, which is why the
+capture and transmit buffers still exist.
+
+What actually went wrong was the **timing budget**.  `make` with `DIAG=1` prints
+the transmit loop's per-sub-frame cost (`diag-tx:`), and it read:
+
+```
+audio(incl pace)=6us  encode=20228us  send+radio=26485us  total=47525us  (40000us = real time)
+```
+
+46.7 ms of work for 40 ms of stream is 17% slow, so the DAC starved (repeated
+samples - the far end hears dropped transmit audio) and the microphone ring
+overflowed (samples dropped before they were ever encoded).  The two costs:
+codec2 3200 encoding is ~10 ms per 20 ms frame on a Pi 4B (half the budget on
+its own), and pushing one 1920 sample block per `iio_buffer_push` cost ~26 ms
+per sub frame in USB overhead - 3 ms a push, eight pushes a frame.
+
+Fixes, all measured afterwards:
+
+* `pluto_tx_samples()` accumulates and pushes **whole 40 ms sub frames**
+  (`TX_CHUNK_SAMPLES` 15360) instead of eight 5 ms blocks: 26.5 ms -> 6.5 ms.
+* `audio_alsa_input()` no longer reads the card from the transmit loop.  A
+  thread drains the card continuously into a 2 s ring, so a slow moment in the
+  loop cannot overflow the card's ring and silently discard microphone audio.
+  Overruns and lost samples are counted now (`audio_tx_overruns()`,
+  `audio_tx_dropped()`), because they used to be invisible.
+* `audio_input()` paces on a **running deadline** rather than sleeping what is
+  left of the current block, so the encode/modulate/push time is charged to the
+  40 ms frame instead of being added on top of it.
+* `m17_tx_lead_in()` sends a few **blank codec frames** (encoded silence, not
+  zero bytes - the first payload logs as `C0006A439CE42108`) before the voice,
+  so the receiver's acquisition and the microphone's start-up fall in silence
+  instead of in speech.  `lead N` (or `M17WEB_TX_LEAD`) sets it, 2 frames = 40 ms,
+  default 4.
+* `audio_input_flush()` at key-down drops what the microphone captured while the
+  radio was starting up (~5 s on this Pluto), which otherwise made the whole
+  over lag the microphone by the depth of the buffer.
+
+After that: transmit loop 39 990-40 010 us per 40 000 us frame, audio
+consumption 8010 samples/s against the card's 7986, `tx_drops=0`,
+`tx_overruns=0`, ring depth 0 (live audio, no lag).  The pending measurements
+are `tx_drops` and `tx_overruns` in the state JSON, shown in the UI's Audio
+panel next to the blank-frame setting.
+
 ## Audio: which device the voice comes from and goes to
 
 The web UI has an **audio device** selector (the "Audio" panel) plus the
@@ -216,6 +277,9 @@ Verified on a Raspberry Pi 4 (Debian 13, Codec2 built from source):
 * both codec back ends work in the app (mode loop and through the modem)
 * the audio device selector works live for browser, direct-ALSA and PulseAudio
   back ends, including the Pi's USB sound card (see the audio section above)
+* the transmit path runs in real time on the Pluto with the Pi's sound card:
+  no dropped samples, no card overruns, blank codec frames before the voice
+  (see the transmit section above)
 
 Also deployed against real hardware: a PlutoSDR (ADALM-PLUTO, fw v0.33,
 reachable at 192.168.2.1 over the USB RNDIS interface ```eth1```).  The web UI

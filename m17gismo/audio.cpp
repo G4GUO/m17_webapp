@@ -109,6 +109,22 @@ const char *audio_local_device(void) {
     return "";
 }
 
+long audio_tx_dropped(void) {
+    long n = 0;
+#ifdef HAVE_ALSA
+    if (want_alsa(m_backend)) n += audio_alsa_starved();
+#endif
+    if (want_browser(m_backend)) n += audio_web_mic_starved();
+    return n;
+}
+
+long audio_tx_overruns(void) {
+#ifdef HAVE_ALSA
+    if (want_alsa(m_backend)) return audio_alsa_overruns();
+#endif
+    return 0;
+}
+
 const char *audio_backend_error(void) {
 #ifdef HAVE_ALSA
     if (want_alsa(m_backend) && audio_alsa_error()[0])
@@ -127,6 +143,7 @@ void audio_backend_status(char *out, int len) {
 
 // ---------------------------------------------------------------------------
 void audio_mic_open(void) {
+    audio_pace_reset();
 #ifdef HAVE_ALSA
     if (want_alsa(m_backend)) audio_alsa_mic_open();
 #endif
@@ -179,17 +196,46 @@ void audio_spk_close(void) {
 }
 
 // ---------------------------------------------------------------------------
-// The M17 transmit path expects one 20 ms codec frame per call, so hold the
-// caller to real time.  A sound card that blocks already takes that long; the
-// file/none paths (and a sound card that failed to open) return instantly and
-// would otherwise spin the transmit loop at 100% CPU.
-static void audio_pace(struct timespec t0, int len) {
+// The M17 transmit path expects one 20 ms codec frame per call and the radio is
+// fed straight from those frames, so the transmit loop has to consume audio in
+// real time.
+//
+// This paces against a running deadline rather than sleeping for whatever is
+// left of the current block: the work between two calls - codec2 encode, M17
+// modulation, the radio push - costs real milliseconds on a Pi, and sleeping a
+// full block on top of that made the loop consume only ~60% of real time.  A
+// transmitter running slow starves the far end and overflows the microphone
+// ring, which is what "dropping transmit samples" sounds like.
+//
+// If the radio blocks (the Pluto's push does), the deadline simply falls behind
+// and is resynced, so this never double-throttles.
+static struct timespec m_pace_next;
+static bool m_pace_valid;
+
+void audio_pace_reset(void) { m_pace_valid = false; }
+
+static void audio_pace(int len) {
     if (len <= 0) return;
-    long want_us = (long)len * 1000000L / 8000;
-    struct timespec t1;
-    clock_gettime(CLOCK_MONOTONIC, &t1);
-    long took_us = (t1.tv_sec - t0.tv_sec) * 1000000L + (t1.tv_nsec - t0.tv_nsec) / 1000;
-    if (took_us < want_us) usleep((useconds_t)(want_us - took_us));
+    long add_ns = (long)len * 1000000000L / 8000;
+    struct timespec now, want;
+
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (!m_pace_valid) { m_pace_next = now; m_pace_valid = true; }
+
+    m_pace_next.tv_nsec += add_ns;
+    while (m_pace_next.tv_nsec >= 1000000000L) { m_pace_next.tv_sec++; m_pace_next.tv_nsec -= 1000000000L; }
+
+    if (m_pace_next.tv_sec < now.tv_sec ||
+        (m_pace_next.tv_sec == now.tv_sec && m_pace_next.tv_nsec <= now.tv_nsec)) {
+        // Behind: something else (the radio, or a stalled source) is the real
+        // clock now, so start the schedule again from here.
+        m_pace_next = now;
+        return;
+    }
+    want.tv_sec  = m_pace_next.tv_sec - now.tv_sec;
+    want.tv_nsec = m_pace_next.tv_nsec - now.tv_nsec;
+    if (want.tv_nsec < 0) { want.tv_sec--; want.tv_nsec += 1000000000L; }
+    nanosleep(&want, NULL);
 }
 
 static void level_update(double *acc, const int16_t *s, int len) {
@@ -204,8 +250,8 @@ static void level_update(double *acc, const int16_t *s, int len) {
 }
 
 void audio_input(int16_t *s, int len) {
-    struct timespec t0, t1;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
+    struct timespec t1;
+    (void)t1;
 #ifdef M17WEB_DIAG
     static int ni = 0;
     if ((ni++ % 200) == 0)
@@ -220,21 +266,21 @@ void audio_input(int16_t *s, int len) {
         // PulseAudio/file when nobody is.
         if (audio_web_input(s, len) > 0) {
             level_update(&m_mic_level, s, len);
-            audio_pace(t0, len);
+            audio_pace(len);
             return;
         }
     }
     if (want_file(m_backend)) {
         audio_file_input(s, len);
         level_update(&m_mic_level, s, len);
-        audio_pace(t0, len);
+        audio_pace(len);
         return;
     }
 #ifdef HAVE_ALSA
     if (want_alsa(m_backend)) {
         audio_alsa_input(s, len);
         level_update(&m_mic_level, s, len);
-        audio_pace(t0, len);
+        audio_pace(len);
         return;
     }
 #endif
@@ -242,12 +288,12 @@ void audio_input(int16_t *s, int len) {
     if (want_pulse(m_backend)) {
         audio_pulse_input(s, len);
         level_update(&m_mic_level, s, len);
-        audio_pace(t0, len);
+        audio_pace(len);
         return;
     }
 #endif
     m_mic_level = 0;
-    audio_pace(t0, len);
+    audio_pace(len);
 }
 
 void audio_output(int16_t *s, int len) {
@@ -270,6 +316,9 @@ void audio_output(int16_t *s, int len) {
     if (want_file(m_backend))    audio_file_output(s, len);
 }
 
+// Drop microphone audio captured before the transmitter was ready.  Called at
+// the start of an over: without it the buffered pre-transmission audio is sent
+// first and the whole over lags the microphone by the ring's depth.
 void audio_input_flush(void) {
 #ifdef HAVE_ALSA
     if (want_alsa(m_backend)) audio_alsa_flush();
@@ -277,6 +326,7 @@ void audio_input_flush(void) {
 #ifdef HAVE_PULSE
     audio_pulse_flush();
 #endif
+    if (want_browser(m_backend)) audio_web_mic_flush();
     if (want_file(m_backend)) audio_file_mic_close();
 }
 

@@ -25,6 +25,7 @@ static bool m_mic_active;
 static bool m_spk_active;
 static long m_mic_frames;                // samples pushed by the browser
 static long m_spk_frames;                // samples sent to the browser
+static long m_mic_starved;               // samples the transmitter had to pad with silence
 
 // ---------------------------------------------------------------------------
 void audio_web_mic_open(void) {
@@ -129,7 +130,14 @@ int audio_web_input(int16_t *s, int len) {
         }
     }
     pthread_mutex_unlock(&m_mtx);
-    if (got < len) memset(&s[got], 0, sizeof(int16_t) * (len - got));
+    if (got < len) {
+        // The browser is not keeping the transmitter fed: count the dropped
+        // samples so the UI can show whether it is happening.
+        pthread_mutex_lock(&m_mtx);
+        m_mic_starved += len - got;
+        pthread_mutex_unlock(&m_mtx);
+        memset(&s[got], 0, sizeof(int16_t) * (len - got));
+    }
     return got;
 }
 
@@ -140,6 +148,23 @@ void audio_web_output(int16_t *s, int len) {
     m_spk_frames += len;
     pthread_mutex_unlock(&m_mtx);
     if (active) webui_audio_to_browser(s, len);
+}
+
+long audio_web_mic_starved(void) {
+    long n;
+    pthread_mutex_lock(&m_mtx);
+    n = m_mic_starved;
+    pthread_mutex_unlock(&m_mtx);
+    return n;
+}
+
+// Called at the start of an over: everything buffered is from before the
+// transmitter was ready, so it goes, and the drop count starts from here.
+void audio_web_mic_flush(void) {
+    pthread_mutex_lock(&m_mtx);
+    m_head = m_tail = m_count = 0;
+    m_mic_starved = 0;
+    pthread_mutex_unlock(&m_mtx);
 }
 
 long audio_web_mic_frames(void) {

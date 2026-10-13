@@ -116,6 +116,7 @@ function applyState(s) {
 
   if (document.activeElement !== $('audioselect')) $('audioselect').value = s.audio || 'browser';
   renderAudioStatus(s);
+  renderTxHealth(s);
   $('simrow').style.display = (s.radio === 'sim') ? 'flex' : 'none';
 }
 
@@ -157,6 +158,25 @@ function renderAudioStatus(s) {
     el.textContent = 'browser audio' + (audioReady ? ' enabled' : ' not enabled yet');
     el.style.color = audioReady ? 'var(--green)' : 'var(--dim)';
     pend.textContent = '';
+  }
+}
+
+// Transmit health: blank frames sent before the voice, and how much microphone
+// audio the transmitter lost this session (card overruns, or padded silence).
+function renderTxHealth(s) {
+  const el = $('txdrops');
+  if (!el) return;
+  const drops = s.tx_drops || 0, over = s.tx_overruns || 0;
+  const lead = (s.tx_lead === undefined) ? 4 : s.tx_lead;
+  const lf = $('leadframes');
+  if (lf && document.activeElement !== lf) lf.value = lead;
+  const ms = (lead * 20) + ' ms of silence';
+  if (drops === 0 && over === 0) {
+    el.textContent = 'transmit clean (lead-in ' + ms + ')';
+    el.style.color = 'var(--green)';
+  } else {
+    el.textContent = 'dropped ' + drops + ' samples, ' + over + ' card overruns';
+    el.style.color = 'var(--amber)';
   }
 }
 
@@ -247,6 +267,11 @@ function wire() {
   });
 
   $('audioselect').onchange = (e) => cmd('audio ' + e.target.value);
+  $('leadframes').onchange = (e) => {
+    const v = Math.max(0, Math.min(50, Number(e.target.value) || 0));
+    e.target.value = v - (v % 2);          // whole sub frames only
+    cmd('lead ' + e.target.value);
+  };
   $('audioenable').onclick = () => startAudio();
   $('volume').oninput = (e) => { if (audio.outGain) audio.outGain.gain.value = e.target.value; };
   $('mute').onchange = (e) => { if (audio.outGain) audio.outGain.gain.value = e.target.checked ? 0 : $('volume').value; };
@@ -347,7 +372,9 @@ async function startAudio() {
       let rms = 0;
       for (let i = 0; i < s.length; i++) rms += s[i] * s[i];
       audio.lastMicLevel = Math.min(1, Math.sqrt(rms / Math.max(1, s.length)) / 32768 * 3);
-      if (st.ptt === 'RX' || !ws || ws.readyState !== WebSocket.OPEN) return;   // only while transmitting
+      // Send from the moment PTT is pressed: waiting for the state to say TX
+      // costs a round trip, which left a gap at the start of every over.
+      if (!txHeld || !ws || ws.readyState !== WebSocket.OPEN) return;
       for (let i = 0; i < s.length; i++) pending.push(s[i]);
       while (pending.length >= 160) {
         const frame = new Int16Array(161);

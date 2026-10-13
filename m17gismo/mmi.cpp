@@ -172,6 +172,14 @@ void mmi_parse(char *cmd){
 		valid = true;
 	}
 
+	// Blank frames sent before the voice, in codec frames (2 = 40 ms)
+	if(strncmp(token[0],"lead",4)==0){
+		if(nt == 2){
+			m17_tx_set_lead_frames(atoi(token[1]));
+			valid = true;
+		}
+	}
+
 	// These commands are only valid at startup
 	if(strncmp(token[0],"mode",4) == 0 ){
 		gui_save_mode(token[1]);
