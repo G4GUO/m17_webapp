@@ -30,7 +30,7 @@ static int pin_export(int pin){
 	char text[10];
 	int l;
     // Export the PTT pins
-	int fd = open("/sys/class/gpio/unexport", O_WRONLY);
+	int fd = open("/sys/class/gpio/export", O_WRONLY);
     if (fd == -1) {
         // Unable to open /sys/class/gpio/export
     	return - 1;
@@ -47,8 +47,8 @@ static int pin_export(int pin){
 static int pin_unexport(int pin){
 	char text[10];
 	int l;
-    // Export the PTT pins
-	int fd = open("/sys/class/gpio/export", O_WRONLY);
+    // Unexport the PTT pins
+	int fd = open("/sys/class/gpio/unexport", O_WRONLY);
     if (fd == -1) {
         // Unable to open /sys/class/gpio/export
     	return - 1;

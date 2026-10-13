@@ -53,6 +53,7 @@ void audio_pulse_spk_open(void);
 void audio_pulse_spk_close(void);
 void audio_pulse_input(int16_t *s, int len);
 void audio_pulse_output(int16_t *s, int len);
+void audio_pulse_flush(void);
 bool audio_pulse_ready(void);
 
 // ---- Browser back end (audio_web.cpp) -------------------------------------

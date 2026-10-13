@@ -133,6 +133,14 @@ Verified on a Raspberry Pi 4 (Debian 13, Codec2 built from source):
 * duplex through the simulator decodes its own transmission with `gerr=0`
 * clean SIGTERM/SIGINT shutdown, including from a browser `q` command
 
+Also deployed against real hardware: a PlutoSDR (ADALM-PLUTO, fw v0.33,
+reachable at 192.168.2.1 over the USB RNDIS interface ```eth1```).  The web UI
+runs on the Pi with ```-r pluto``` and ```iio_attr``` confirms the radio is being
+driven: RX and TX LO both 146 400 000 Hz, RX sample rate 384 kS/s (3.072 MS/s
+with the x8 decimation the code expects), rf_bandwidth 200 kHz, live RSSI in
+the UI.  PulseAudio and the simulator are still compiled in, so
+```-r sim```/```-a pulse``` remain available as fallbacks.
+
 Not done yet, in priority order:
 
 1. **Voice fidelity** - a clean simulator should reproduce the reference Codec2
@@ -140,11 +148,20 @@ Not done yet, in priority order:
    (envelope) with the original speech after ~1.1 s of pipeline latency.  That
    points at a lost or repeated subframe in the M17 stream path (or my test
    harness's pacing); compare sent vs decoded payloads frame by frame.
-2. **Real hardware** - the Pluto and Lime paths compile but have not been
-   exercised since this fork (no SDR was attached during development).
-3. The web UI has been driven headlessly (curl + `wstest.py`) but not clicked
+2. **Hardware PTT** - ```rpi_gpio.cpp``` uses the legacy sysfs GPIO interface,
+   which this kernel rejects outright (```echo 10 > /sys/class/gpio/export``` gives
+   EINVAL even as root), so the physical PTT input/output pins do not work;
+   PTT from the browser does.  Fixing it means rewriting ```rpi_gpio.cpp``` on
+   libgpiod.  (The export/unexport swap found upstream was still wrong and is
+   fixed.)
+3. **Not persistent** - the Pluto's ```eth1``` address (```192.168.2.2/24```) was
+   added by hand and nothing starts the program at boot; ```pluto_open()``` calls
+   ```exit(-1)``` when it cannot reach 192.168.2.1, so a reboot needs both steps
+   repeated.  A NetworkManager entry plus a systemd unit would fix that.
+4. **LimeSDR** - still untested (none attached).
+5. The web UI has been driven headlessly (curl + `wstest.py`) but not clicked
    through in a real browser.
-4. Reflector gateway mode (`mode gate`) has not been tested against a live
+6. Reflector gateway mode (`mode gate`) has not been tested against a live
    reflector.
-5. Upstream has no licence file; this fork inherits that (all rights reserved by
+7. Upstream has no licence file; this fork inherits that (all rights reserved by
    default) - worth clarifying with the author before publishing.

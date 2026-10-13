@@ -20,6 +20,10 @@ CC   = gcc
 CXX  = g++
 TARGET = m17web
 
+# Without this, a bare "make" sometimes picks no goal at all and reports success
+# without building anything.
+.DEFAULT_GOAL := all
+
 CODEC2_PREFIX ?= /usr/local
 PULSE  ?= $(shell pkg-config --exists libpulse-simple 2>/dev/null && echo 1 || echo 0)
 PLUTO  ?= $(shell test -f /usr/include/iio.h -o -f /usr/local/include/iio.h && echo 1 || echo 0)

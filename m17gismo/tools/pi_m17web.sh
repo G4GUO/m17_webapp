@@ -7,7 +7,8 @@
 #   bash tools/pi_m17web.sh log [n]
 #   bash tools/pi_m17web.sh cmd "rf 146400000"
 #
-# Defaults to the simulator (-r sim) and the web UI on port 8080, running from
+# Defaults to the simulator (RADIO=sim; use RADIO=pluto for the real radio) and the
+# web UI on port 8080, running from
 # ~/m17test where it finds config.txt / M17Hosts.txt.
 set -uo pipefail
 
@@ -17,6 +18,7 @@ RUNDIR=${RUNDIR:-$HOME/m17test}
 LOG=${LOG:-/tmp/m17web.log}
 PIDF=${PIDF:-/tmp/m17web.pid}
 PORT=${PORT:-8080}
+RADIO=${RADIO:-sim}          # sim | pluto | lime
 MODE=${MODE:-radio}
 
 prepare() {
@@ -61,7 +63,7 @@ start)
             exit 1
         fi
     fi
-    nohup "$BIN" -r sim -w "$PORT" "$@" >"$LOG" 2>&1 &
+    nohup "$BIN" -r "$RADIO" -w "$PORT" "$@" >"$LOG" 2>&1 &
     echo $! > "$PIDF"
     sleep 2
     if pgrep -F "$PIDF" >/dev/null 2>&1; then
