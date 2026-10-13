@@ -1,0 +1,8 @@
+Vendored from https://github.com/M17-Project/Codec2-mod
+commit 7c334283794fa6304dc014f12df70afc8393143a (2026-09-30)
+License: LGPL 2.1 (see LICENSE)
+
+This fork only implements the 3200 bps mode (8 bytes / 160 samples per frame),
+which is what M17 uses. It has no build system of its own, so the sources are
+compiled directly by the m17web makefile (CODEC2_BACKEND=mod) through the small
+upstream-compatible shim in codec2_shim.c.

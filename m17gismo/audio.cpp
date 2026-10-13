@@ -120,6 +120,12 @@ static void level_update(double *acc, const int16_t *s, int len) {
 }
 
 void audio_input(int16_t *s, int len) {
+#ifdef M17WEB_DIAG
+    static int ni = 0;
+    if ((ni++ % 200) == 0)
+        fprintf(stdout, "diag-audio: in  len=%d mic_open=%d backend=%s\n", len, m_mic_open,
+                audio_backend_name(m_backend)), fflush(stdout);
+#endif
     memset(s, 0, sizeof(int16_t) * len);
     if (!m_mic_open) return;
 
@@ -147,6 +153,12 @@ void audio_input(int16_t *s, int len) {
 }
 
 void audio_output(int16_t *s, int len) {
+#ifdef M17WEB_DIAG
+    static int no = 0;
+    if ((no++ % 50) == 0)
+        fprintf(stdout, "diag-audio: out len=%d spk_open=%d backend=%s first=%d\n", len, m_spk_open,
+                audio_backend_name(m_backend), (s && len > 0) ? s[0] : 0), fflush(stdout);
+#endif
     if (len <= 0) return;
     level_update(&m_spk_level, s, len);
     if (!m_spk_open) return;

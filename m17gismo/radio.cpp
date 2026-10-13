@@ -95,8 +95,23 @@ int radio_open(RadioType type){
 #endif
 #ifdef HAVE_PLUTO
 	if( m_radio_type == RADIO_TYPE_PLUTO ){
+		if (pluto_open(N_SAMPLES) < 0) {
+			// No Pluto (unplugged, or the USB network interface has no address):
+			// keep running with the simulator so the web UI stays up and the
+			// reason is visible, instead of dying.
+			fprintf(stderr,
+			        "m17web: Pluto not reachable - check the USB network interface\n"
+			        "        (e.g. eth1 with 192.168.2.2/24, then the Pluto answers on 192.168.2.1)\n");
+#ifdef HAVE_SIM
+			fprintf(stderr, "m17web: falling back to the simulated radio (-r sim)\n");
+			m_radio_type = RADIO_TYPE_SIM;
+			sim_open();
+#else
+			fprintf(stderr, "m17web: no simulator compiled in, radio unusable\n");
+#endif
+			return -1;
+		}
 		uint32_t srate = 48000;
-		pluto_open(N_SAMPLES);
 		pluto_set_rx_sample_rate(   srate*64 );
 		pluto_set_tx_sample_rate(   srate*64 );
 		pluto_configure_x8_int_dec( srate*8 );

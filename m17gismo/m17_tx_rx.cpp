@@ -3,7 +3,8 @@
 #include <unistd.h>
 #include <memory.h>
 #include "m17defines.h"
-#include "codec2.h"
+// codec2 (or the modified codec through codec2mod/codec2_shim.h) is included by
+// m17defines.h according to CODEC2_BACKEND.
 
 typedef enum{PTT_RX,PTT_TX,PTT_CA,PTT_DP}PttType;
 typedef enum{STATE_RX,STATE_TX,STATE_DP}NetState;
@@ -328,7 +329,14 @@ void m17_txrx_disable(void){
 // Init this module
 void m17_txrx_init(void){
 	m_codec2 = codec2_create(CODEC2_MODE_3200);
+	if (m_codec2 == NULL) {
+		// Silently continuing would transmit empty payloads that a receiver
+		// rejects on the PRBS9 payload check - no voice, no obvious reason.
+		fprintf(stderr, "m17web: codec2_create(CODEC2_MODE_3200) FAILED - no voice\n");
+	}
 	m_nsam   = codec2_samples_per_frame(m_codec2);
+	printf("m17web: codec %s, %d samples and %d bits per frame\n",
+	       m_codec2 ? "ready" : "MISSING", m_nsam, codec2_bits_per_frame(m_codec2));
 	m17_db_listen_all( false );
 }
 

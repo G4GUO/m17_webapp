@@ -15,6 +15,11 @@
 #   WEB=0          leave the web UI out
 #   EMBED=1        embed www/ into the binary (default: 1 if www/ exists)
 #   DEBUG=1        -O0 -g
+#   CODEC2_BACKEND=lib|mod
+#                  lib (default) = external libcodec2 (any mode)
+#                  mod = the vendored modified Codec2 in codec2mod/ (M17-Project/
+#                        Codec2-mod): 3200 bps only, which is what M17 uses, and
+#                        no external Codec2 is needed at all
 #
 CC   = gcc
 CXX  = g++
@@ -25,6 +30,7 @@ TARGET = m17web
 .DEFAULT_GOAL := all
 
 CODEC2_PREFIX ?= /usr/local
+CODEC2_BACKEND ?= lib
 PULSE  ?= $(shell pkg-config --exists libpulse-simple 2>/dev/null && echo 1 || echo 0)
 PLUTO  ?= $(shell test -f /usr/include/iio.h -o -f /usr/local/include/iio.h && echo 1 || echo 0)
 LIME   ?= $(shell test -f /usr/include/limesuite/LimeSuite.h -o -f /usr/local/include/LimeSuite.h -o -f /usr/include/LimeSuite.h && echo 1 || echo 0)
@@ -39,6 +45,12 @@ LIBS     = -lcodec2 -lpthread -lm -lrt -lstdc++
 
 ifeq ($(DEBUG),1)
 CFLAGS  += -O0 -g
+endif
+
+# DIAG=1 enables the receive path tracing in m17_rx_parse.cpp
+ifeq ($(DIAG),1)
+CFLAGS   += -DM17WEB_DIAG
+CXXFLAGS += -DM17WEB_DIAG
 endif
 
 # ---------------------------------------------------------------------------
@@ -102,6 +114,30 @@ endif
 CFLAGS   += -DHAVE_RPI_GPIO
 CXXFLAGS += -DHAVE_RPI_GPIO
 
+# ---------------------------------------------------------------------------
+# Codec2 back end
+# ---------------------------------------------------------------------------
+# The modified Codec2 (M17-Project/Codec2-mod) is vendored in codec2mod/ and has
+# no build system of its own, so its sources are compiled here.  Its public
+# symbols are renamed so that one binary can link both it and the stock
+# libcodec2 - which is how the bitexact target compares the two.
+CODEC2_MOD_RENAME = -Dcodec2_init=codec2raw_init \
+                    -Dcodec2_encoder_init=codec2raw_encoder_init \
+                    -Dcodec2_decoder_init=codec2raw_decoder_init \
+                    -Dcodec2_encode=codec2raw_encode \
+                    -Dcodec2_decode=codec2raw_decode
+CODEC2_MOD_SRCS   = $(wildcard codec2mod/src/*.c) codec2mod/codec2_shim.c
+CODEC2_MOD_OBJS   = $(CODEC2_MOD_SRCS:.c=.o)
+CODEC2_MOD_CFLAGS = -Wall -Wextra -O3 -Icodec2mod -Icodec2mod/inc \
+                    -DCODEC2_MOD $(CODEC2_MOD_RENAME)
+
+ifeq ($(CODEC2_BACKEND),mod)
+CFLAGS    += -DCODEC2_MOD -Icodec2mod
+CXXFLAGS  += -DCODEC2_MOD -Icodec2mod
+LIBS      := $(filter-out -lcodec2,$(LIBS))
+EXTRA_OBJS = $(CODEC2_MOD_OBJS)
+endif
+
 # Embed the web assets
 ifeq ($(EMBED),1)
 CXXFLAGS  += -DEMBED_WWW
@@ -115,7 +151,7 @@ HDRS = $(wildcard *.h) $(GENERATED)
 $(OBJS): $(HDRS)
 
 # ---------------------------------------------------------------------------
-.PHONY: all sim console clean help assets
+.PHONY: all sim console bitexact clean help assets
 
 all: $(TARGET)
 
@@ -125,14 +161,42 @@ sim:
 console:
 	$(MAKE) CONSOLE=1 WEB=0 $(TARGET)
 
-$(TARGET): $(GENERATED) $(OBJS)
-	$(CXX) $(CXXFLAGS) $(OBJS) -o $@ $(LIBS)
+$(TARGET): $(GENERATED) $(OBJS) $(EXTRA_OBJS)
+	$(CXX) $(CXXFLAGS) $(OBJS) $(EXTRA_OBJS) -o $@ $(LIBS)
 
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
+
+# The vendored modified codec (always compiled with its symbols renamed)
+codec2mod/%.o: codec2mod/%.c
+	$(CC) $(CODEC2_MOD_CFLAGS) -c $< -o $@
+
+# Compare the vendored modified Codec2 against the stock libcodec2.
+#
+# Two separate binaries, one codec each, on purpose: libcodec2 exports internal
+# symbols (kiss_fftr, analyse_one_frame, ...) under the same names as the
+# modified codec, and an executable's definitions win when the shared library
+# resolves its own calls - link both and the stock encoder jumps into the mod's
+# internals (segfault).  tools/codec2_compare.py diffs the results.
+bitexact: $(CODEC2_MOD_OBJS)
+	@mkdir -p tests
+	$(CC) -Wall -Wextra -O3 -I$(CODEC2_PREFIX)/include -I$(CODEC2_PREFIX)/include/codec2 \
+	    -o tests/codec2_frame_stock tests/codec2_frame_codec.c -lcodec2 -lm
+	$(CC) -Wall -Wextra -O3 -Icodec2mod -Icodec2mod/inc -DCODEC2_MOD \
+	    -o tests/codec2_frame_mod tests/codec2_frame_codec.c $(CODEC2_MOD_OBJS) -lm
+	@echo "built tests/codec2_frame_stock and tests/codec2_frame_mod"
+	@echo "usage: make bitexact-check INPUT=~/codec2/raw/hts1a.raw"
+
+# Run both codecs over one file and compare bitstreams + decoded audio
+bitexact-check: bitexact
+	@test -n "$(INPUT)" || { echo "usage: make bitexact-check INPUT=/path/to/file.raw"; exit 1; }
+	tests/codec2_frame_stock $(INPUT) /tmp/c2_stock.c2 /tmp/c2_stock.raw
+	tests/codec2_frame_mod   $(INPUT) /tmp/c2_mod.c2   /tmp/c2_mod.raw
+	python3 tools/codec2_compare.py /tmp/c2_stock.c2 /tmp/c2_mod.c2 \
+	    --stock-raw /tmp/c2_stock.raw --mod-raw /tmp/c2_mod.raw
 
 # Generate the embedded asset table from www/
 www_assets.h: $(wildcard www/*) tools/embed_www.py
@@ -143,10 +207,14 @@ assets:
 
 clean:
 	rm -f $(TARGET) *.o www_assets.h
+	rm -f tests/codec2_frame_stock tests/codec2_frame_mod
+	rm -f codec2mod/*.o codec2mod/src/*.o
 
 help:
 	@echo "make            web UI, all available radio and audio back ends"
 	@echo "make sim        web UI with the simulated radio (no hardware needed)"
 	@echo "make console    legacy ncurses UI"
+	@echo "make bitexact-check INPUT=file.raw   modified vs stock Codec2 comparison"
 	@echo "options: PULSE=0 PLUTO=0 LIME=0 SIM=1 CONSOLE=1 WEB=0 EMBED=0 DEBUG=1"
+	@echo "         CODEC2_BACKEND=mod   (use the vendored modified Codec2)"
 	@echo "run:     ./$(TARGET) -r sim -w 8080"

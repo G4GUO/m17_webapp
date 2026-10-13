@@ -53,6 +53,44 @@ Codec2 itself (no cmake on Raspberry Pi OS by default):
     mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release .. && make -j4
     sudo make install && sudo ldconfig
 
+## Codec2 back ends: stock libcodec2 or the modified codec
+
+Two codecs can be built in, selected with `CODEC2_BACKEND`:
+
+    make                        # CODEC2_BACKEND=lib (default): external libcodec2
+    make CODEC2_BACKEND=mod     # vendored M17-Project/Codec2-mod, no external codec
+
+    make bitexact-check INPUT=~/codec2/raw/hts1a.raw    # compare the two
+
+`codec2mod/` contains [M17-Project/Codec2-mod](https://github.com/M17-Project/Codec2-mod)
+vendored at commit `7c334283` (see `codec2mod/VENDORED.txt`).  That fork is a
+minimal extraction of **only** the 3200 bps mode - which is exactly what M17
+uses - with static, caller-supplied codec state, no runtime `malloc`, and a
+smaller footprint.  It ships no build system, so the makefile compiles its
+sources directly, and `codec2mod/codec2_shim.c` adapts its static-state API
+(`codec2_encoder_t` / `codec2_encode()`) to the upstream API the rest of the
+project expects (`codec2_create(CODEC2_MODE_3200)` / `codec2_encode()`), so no
+other file needed changing.  With `CODEC2_BACKEND=mod` the binary has **no
+libcodec2 dependency at all** (verify with `ldd`).
+
+Measured on the Pi 4B, same 150 frames of `hts1a.raw`, stock vs modified:
+
+| | stock libcodec2 | modified Codec2 | ratio |
+|---|---|---|---|
+| encode | 0.145 ms/frame | 0.070 ms/frame | **2.07x faster** |
+| decode | 0.104 ms/frame | 0.088 ms/frame | 1.18x faster |
+
+Bitstream compatibility, which is what matters on air: **149 of 150 frames were
+byte-for-byte identical**; one frame differed by 2 bits.  The fork claims
+bit-exact encoder output, and on this platform that holds for 149/150 frames
+here - worth knowing before relying on it for forensic comparison, but 2 bits
+in one frame is irrelevant to interop.  Decoded audio was not byte-identical
+(as the fork documents) but correlated 0.9999 on energy envelopes.
+
+Both codecs were also run through the full modem path (simulator, duplex,
+`file:` audio in and out): identical behaviour, `gerr=0`, decoded audio
+returned in both cases.
+
 ## Running
 
     ./m17web -r sim -w 8080                     # simulated radio, web UI port 8080
@@ -132,6 +170,7 @@ Verified on a Raspberry Pi 4 (Debian 13, Codec2 built from source):
   and through the file back end
 * duplex through the simulator decodes its own transmission with `gerr=0`
 * clean SIGTERM/SIGINT shutdown, including from a browser `q` command
+* both codec back ends work in the app (mode loop and through the modem)
 
 Also deployed against real hardware: a PlutoSDR (ADALM-PLUTO, fw v0.33,
 reachable at 192.168.2.1 over the USB RNDIS interface ```eth1```).  The web UI
@@ -154,10 +193,13 @@ Not done yet, in priority order:
    PTT from the browser does.  Fixing it means rewriting ```rpi_gpio.cpp``` on
    libgpiod.  (The export/unexport swap found upstream was still wrong and is
    fixed.)
-3. **Not persistent** - the Pluto's ```eth1``` address (```192.168.2.2/24```) was
-   added by hand and nothing starts the program at boot; ```pluto_open()``` calls
-   ```exit(-1)``` when it cannot reach 192.168.2.1, so a reboot needs both steps
-   repeated.  A NetworkManager entry plus a systemd unit would fix that.
+3. **Partly persistent** - the Pluto interface now has a NetworkManager profile
+   (```nmcli con show pluto```: ```eth1```, static ```192.168.2.2/24```,
+   autoconnect), which was needed because the Pluto re-enumerates on USB and the
+   hand-added address disappeared with it.  Nothing yet starts m17web at boot;
+   a systemd unit is the remaining step.  The program no longer dies when the
+   Pluto is missing - it reports why and falls back to the simulator so the web
+   UI stays usable.
 4. **LimeSDR** - still untested (none attached).
 5. The web UI has been driven headlessly (curl + `wstest.py`) but not clicked
    through in a real browser.

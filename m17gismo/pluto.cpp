@@ -273,9 +273,12 @@ int pluto_open( uint32_t block_size ){
 
 //	if ((m_ctx = iio_create_network_context("192.168.2.1")) == NULL) {
 	if ((m_ctx = iio_create_network_context(m_ip_address)) == NULL) {
-	    printf("Adalm-Pluto %s NOT found\n",m_ip_address);
+	    // Upstream called exit(-1) here, which killed the whole program (web UI
+	    // included) whenever the Pluto was unplugged or its USB network address
+	    // was missing.  Report it and let radio_open() decide what to do.
+	    printf("Adalm-Pluto %s NOT found\n", m_ip_address);
 	    m_pluto_running = false;
-	    exit(-1);
+	    return -1;
 	}
 
 	if (iio_context_get_devices_count(m_ctx) <= 0) {

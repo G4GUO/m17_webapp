@@ -1,6 +1,22 @@
 #include <math.h>
 #include <memory.h>
+#include <stdio.h>
+#include <stdarg.h>
 #include "m17defines.h"
+
+// Receive-path tracing: build with DIAG=1 (makefile) to enable.
+#ifdef M17WEB_DIAG
+static void diag(const char *fmt, ...) {
+	static int n = 0;
+	if (n++ > 400) return;
+	va_list ap; va_start(ap, fmt);
+	fprintf(stdout, "diag-rx: "); vfprintf(stdout, fmt, ap); fprintf(stdout, "\n");
+	va_end(ap);
+	fflush(stdout);
+}
+#else
+#define diag(...) do { } while (0)
+#endif
 
 static uint8_t m_lsf[2][30];
 static uint8_t m_packet[800];
@@ -25,6 +41,7 @@ static void valid_lsf_received(uint48_t src_add, uint48_t dst_add, uint8_t *meta
 
 static void sound_data_received(uint8_t *data, int len){
 	const M17_Dbase *db = m17_get_db();
+	diag("stream audio: rx_dest=%llx for_me=%d", (unsigned long long)db->rx_dest, m17_db_is_for_me(db->rx_dest));
 	if(m17_db_is_for_me( db->rx_dest ) == true ){
 		m17_txrx_spkr_audio( &data[0] );
 		m17_txrx_spkr_audio( &data[len/2]);
@@ -76,6 +93,7 @@ void update_lich(uint8_t *in){
 		memcpy(&(m_lsf[0][seq*5]),in,sizeof(uint8_t)*5);
 	    // Check the CRC
 	    uint16_t crc = m17_crc_array_encode( m_lsf[0], 30 );
+	    diag("lich seq=%d lsf_crc=0x%04x %s", seq, crc, crc == 0 ? "VALID" : "");
 	    if( crc == 0x0000 ){
 		    // valid LSF, save a good copy
 	    	copy_lich();
@@ -95,7 +113,11 @@ void decode_link_frame(float *sb){
 	m17_viterbi_decode( so[1], bits, 488);
 	// Pack LSF
 	pack_1_to_8(&bits[1], bytes, 240);// Discard 4 tail bits
-	if(m17_crc_array_encode( m_packet, 30 )==0){
+	// Upstream tested m_packet (an unrelated packet buffer) here, so the LSF of a
+	// link setup frame was never actually validated.  Check the frame we decoded.
+	uint16_t lsf_crc = m17_crc_array_encode( bytes, 30 );
+	diag("link setup lsf_crc=0x%04x %s", lsf_crc, lsf_crc == 0 ? "VALID" : "");
+	if(lsf_crc == 0){
 	    parse_lsf(bytes);
 	}
 }
@@ -145,7 +167,9 @@ void decode_stream_frame(float *sb){
     m17_db_stream_seq_number(fn);
 //     printf("FN %d \n",fn);
     // Only pass data to higher layer if a valid lich has been received
-    if(m17_crc_array_encode( m_lsf[1], 30 ) == 0){
+    uint16_t stored_crc = m17_crc_array_encode( m_lsf[1], 30 );
+    diag("stream fn=%d stored_lsf_crc=0x%04x chan=%d", fn, stored_crc, (int)m17_db_get_chan_type());
+    if(stored_crc == 0){
         // Point to start of data
         uint8_t *data = &pld[2];
         if(m17_db_get_chan_type() == DRTODN ){

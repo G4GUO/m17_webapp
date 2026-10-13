@@ -2,7 +2,13 @@
 #define M17DEFINES_H
 #include <stdint.h>
 #include <stdio.h>
+#ifdef CODEC2_MOD
+// Modified Codec2 (M17-Project/Codec2-mod) through the adapter in codec2mod/.
+// 3200 bps only, which is what M17 uses.  See codec2mod/VENDORED.txt.
+#include "codec2_shim.h"
+#else
 #include "codec2.h"
+#endif
 
 //#define __TEST__
 //#define __TRACE__
