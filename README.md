@@ -318,3 +318,16 @@ Not done yet, in priority order:
    reflector.
 7. Upstream has no licence file; this fork inherits that (all rights reserved by
    default) - worth clarifying with the author before publishing.
+
+## Licence
+
+The code here is released under the **BSD Zero Clause License (0BSD)** - see
+[LICENSE](LICENSE).  It is the most permissive licence available: use, change and
+redistribute it for any purpose, with no conditions and no requirement to credit
+anyone.  Where that is too lax for your taste, MIT (same terms plus attribution)
+or GPL-3.0 are one-line swaps.
+
+Two components vendored in the tree keep their own licences and are **not**
+covered by it: the modified Codec2 in `m17gismo/codec2mod/` (LGPL-2.1) and the
+LimeSuite headers (Apache-2.0).  See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)
+for what that means in practice.
