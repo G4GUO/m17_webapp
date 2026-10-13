@@ -22,6 +22,9 @@ RADIO=${RADIO:-sim}          # sim | pluto | lime
 MODE=${MODE:-radio}
 
 prepare() {
+    # PulseAudio socket lives in the user runtime dir; without this the app
+    # cannot reach it when started from a plain ssh session
+    export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
     mkdir -p "$RUNDIR"
     cd "$RUNDIR" || exit 1
     [ -f M17Hosts.txt ] || cp "$SRCDIR/M17Hosts.txt" . 2>/dev/null

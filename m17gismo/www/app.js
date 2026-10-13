@@ -115,7 +115,49 @@ function applyState(s) {
   }
 
   if (document.activeElement !== $('audioselect')) $('audioselect').value = s.audio || 'browser';
+  renderAudioStatus(s);
   $('simrow').style.display = (s.radio === 'sim') ? 'flex' : 'none';
+}
+
+function renderAudioStatus(s) {
+  const p = s.pulse || {};
+  const a = s.alsa || {};
+  const el = $('audiostatus');
+  const pend = $('audiopending');
+
+  if (s.audio === 'alsa' || s.audio === 'pulse') {
+    const isAlsa = (s.audio === 'alsa');
+    const info = isAlsa ? a : p;
+    const which = isAlsa ? 'ALSA' : 'PulseAudio';
+    if (!info.compiled) {
+      el.textContent = 'this build has no ' + which + ' support (rebuild with ' +
+        (isAlsa ? 'ALSA' : 'PULSE') + '=1)';
+      el.style.color = 'var(--amber)';
+    } else if (info.error) {
+      el.textContent = which + ' problem: ' + info.error;
+      el.style.color = 'var(--red)';
+    } else if (info.ready) {
+      el.textContent = 'Pi sound card in use' + (isAlsa ? ' (' + (a.device || 'default') + ')' : ' (PulseAudio)');
+      el.style.color = 'var(--green)';
+    } else {
+      el.textContent = 'Pi sound card (' + which + ') selected - opens at the next ' +
+        'transmit/receive cycle';
+      el.style.color = 'var(--amber)';
+    }
+    pend.textContent = s.audio_pending ? '(applying...)' : '';
+  } else if (s.audio === 'both') {
+    el.textContent = 'browser audio + Pi sound card';
+    el.style.color = 'var(--green)';
+    pend.textContent = s.audio_pending ? '(applying...)' : '';
+  } else if (s.audio === 'none') {
+    el.textContent = 'audio muted';
+    el.style.color = 'var(--dim)';
+    pend.textContent = '';
+  } else {
+    el.textContent = 'browser audio' + (audioReady ? ' enabled' : ' not enabled yet');
+    el.style.color = audioReady ? 'var(--green)' : 'var(--dim)';
+    pend.textContent = '';
+  }
 }
 
 function fillRefs(names) {

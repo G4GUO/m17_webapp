@@ -220,9 +220,12 @@ void mmi_parse(char *cmd){
 		valid = true;
 	}
 
-	// Audio routing: browser (web UI), pulse (local sound card), file, both, none
+	// Audio routing: alsa (Pi sound card, direct), pulse (Pi sound card via
+	// PulseAudio), browser (web UI), file, both, none.
+	// "audio alsa plughw:3,0" also selects the ALSA device.
 	if(strncmp(token[0],"audio",5)==0){
-		if(nt == 2){
+		if(nt == 2 || nt == 3){
+			if(nt == 3) audio_alsa_set_device(token[2]);
 			audio_set_backend(audio_parse_backend(token[1]));
 			valid = true;
 		}

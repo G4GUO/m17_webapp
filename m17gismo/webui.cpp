@@ -143,10 +143,26 @@ static void decode_addr(uint48_t a, char *out, int len) {
     out[i] = 0;
 }
 
+// Small append helper: building the state string as one 31 argument vararg
+// call was both unreadable and fragile (one stray escape silently shifted every
+// later argument).  Each append is checked by -Wformat on its own.
+static int json_add(char *out, int len, int used, const char *fmt, ...) {
+    if (used < 0) used = 0;
+    if (used >= len - 1) return len - 1;
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(out + used, (size_t)(len - used), fmt, ap);
+    va_end(ap);
+    if (n < 0) return used;
+    return (used + n < len) ? used + n : len - 1;
+}
+
 static void build_state(char *out, int len) {
     const M17_Dbase *db = m17_get_db();
     char mode[24];
     snprintf(mode, sizeof(mode), "%s", m_mode[0] ? m_mode : mode_name(db->chan_type));
+    for (int i = 0; mode[i]; i++)
+        if (mode[i] == '\n' || mode[i] == '\r' || mode[i] == '\t') mode[i] = ' ';
 
     char ref[16] = "";
     m17_net_ref_address(ref);
@@ -162,44 +178,40 @@ static void build_state(char *out, int len) {
     for (int i = (int)strlen(gate) - 1; i >= 0 && (gate[i] == ' ' || gate[i] < 0x20); i--)
         gate[i] = 0;
 
-    snprintf(out, len,
-        "{\"t\":\"state\","
-        "\"radio\":\"%s\","
-        "\"mode\":\"%s\","
-        "\"ptt\":\"%s\","
-        "\"src\":\"%s\",\"dst\":\"%s\",\"gate\":\"%s\","
-        "\"rx_freq\":%llu,\"tx_freq\":%llu,"
-        "\"rx_gain\":%.3f,\"tx_gain\":%.3f,"
-        "\"fc\":%.6f,"
-        "\"afc\":%s,"
-        "\"listen_all\":%s,"
-        "\"in_frame\":%s,"
-        "\"signal\":%.3f,\"power\":%.3f,"
-        "\"frames\":%u,\"gerr\":%u,"
-        "\"ref\":{\"name\":\"%s\",\"module\":\"%c\",\"connected\":%s},"
-        "\"audio\":\"%s\","
-        "\"mic_level\":%.3f,\"spk_level\":%.3f,"
-        "\"clients\":%d,"
-        "\"rx_stream\":%lu,"
-        "\"uptime\":%ld}",
-        radio_name(),
-        mode,
-        m_ptt,
-        m_src, m_dst, gate,
-        (unsigned long long)db->rx_freq, (unsigned long long)db->tx_freq,
-        radio_get_rx_gain(), radio_get_tx_gain(),
-        radio_get_freq_correction(),
-        radio_get_afc_status() ? "true" : "false",
-        db->listen_flag ? "true" : "false",
-        (m_in_frame || db->in_frame) ? "true" : "false",
-        m_signal, m_power,
-        db->n_frames, db->g_errors,
-        ref, mod, m17_net_connected() ? "true" : "false",
-        audio_backend_name(audio_get_backend()),
-        audio_get_mic_level(), audio_get_spk_level(),
-        m_srv ? ws_client_count(m_srv) : 0,
-        (unsigned long)(db->n_frames - m_frames_seen),
-        (long)(now_ms() / 1000));
+    int o = 0;
+    o = json_add(out, len, o, "{\"t\":\"state\",\"radio\":\"%s\"", radio_name());
+    o = json_add(out, len, o, ",\"mode\":\"%s\",\"ptt\":\"%s\"", mode, m_ptt);
+    o = json_add(out, len, o, ",\"src\":\"%s\",\"dst\":\"%s\",\"gate\":\"%s\"", m_src, m_dst, gate);
+    o = json_add(out, len, o, ",\"rx_freq\":%llu,\"tx_freq\":%llu",
+                 (unsigned long long)db->rx_freq, (unsigned long long)db->tx_freq);
+    o = json_add(out, len, o, ",\"rx_gain\":%.3f,\"tx_gain\":%.3f", radio_get_rx_gain(), radio_get_tx_gain());
+    o = json_add(out, len, o, ",\"fc\":%.6f", radio_get_freq_correction());
+    o = json_add(out, len, o, ",\"afc\":%s,\"listen_all\":%s,\"in_frame\":%s",
+                 radio_get_afc_status() ? "true" : "false",
+                 db->listen_flag ? "true" : "false",
+                 (m_in_frame || db->in_frame) ? "true" : "false");
+    o = json_add(out, len, o, ",\"signal\":%.3f,\"power\":%.3f", m_signal, m_power);
+    o = json_add(out, len, o, ",\"frames\":%u,\"gerr\":%u", db->n_frames, db->g_errors);
+    o = json_add(out, len, o, ",\"ref\":{\"name\":\"%s\",\"module\":\"%c\",\"connected\":%s}",
+                 ref, mod, m17_net_connected() ? "true" : "false");
+    o = json_add(out, len, o, ",\"audio\":\"%s\",\"audio_pending\":%s",
+                 audio_backend_name(audio_get_backend()),
+                 audio_backend_pending() ? "true" : "false");
+    o = json_add(out, len, o, ",\"pulse\":{\"compiled\":%s,\"ready\":%s,\"error\":\"%s\"}",
+                 audio_have_pulse() ? "true" : "false",
+                 (audio_get_backend() == AUDIO_PULSE && audio_local_ready()) ? "true" : "false",
+                 (audio_get_backend() == AUDIO_PULSE) ? audio_backend_error() : "");
+    o = json_add(out, len, o, ",\"alsa\":{\"compiled\":%s,\"ready\":%s,\"device\":\"%s\",\"error\":\"%s\"}",
+                 audio_have_alsa() ? "true" : "false",
+                 (audio_get_backend() == AUDIO_ALSA && audio_local_ready()) ? "true" : "false",
+                 audio_local_device(),
+                 (audio_get_backend() == AUDIO_ALSA) ? audio_backend_error() : "");
+    o = json_add(out, len, o, ",\"mic_level\":%.3f,\"spk_level\":%.3f",
+                 audio_get_mic_level(), audio_get_spk_level());
+    o = json_add(out, len, o, ",\"clients\":%d", m_srv ? ws_client_count(m_srv) : 0);
+    o = json_add(out, len, o, ",\"rx_stream\":%lu", (unsigned long)(db->n_frames - m_frames_seen));
+    o = json_add(out, len, o, ",\"uptime\":%ld}", (long)(now_ms() / 1000));
+    out[o] = 0;
 }
 
 static void push_state(void) {

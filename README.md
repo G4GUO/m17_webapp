@@ -130,6 +130,49 @@ log lines, command responses, help text and the reflector list; binary frames
 for audio, tagged `0x01` + s16le PCM (8 kHz mono) for the microphone and `0x02`
 + PCM for decoded receive audio.
 
+## Audio: which device the voice comes from and goes to
+
+The web UI has an **audio device** selector (the "Audio" panel) plus the
+equivalent commands, and the choice is applied live - the radio loop re-opens
+its streams within one transmit/receive cycle, no restart needed:
+
+| UI option | command | what it does |
+|---|---|---|
+| Raspberry Pi sound card (direct) | `audio alsa [device]` | the card through **ALSA**, no daemon in the path |
+| browser microphone / speaker | `audio browser` | WebAudio in the page, 8 kHz over the WebSocket |
+| Raspberry Pi sound card (PulseAudio) | `audio pulse` | the same card through PulseAudio |
+| browser + Pi sound card | `audio both` | mic from the browser (falling back to the card), audio out to both |
+| mute | `audio none` | silence in, discard out |
+| (testing) | `-a file:in.raw:out.raw` | raw 8 kHz files instead of a device |
+
+`make` builds the ALSA back end when `libasound2-dev` is present (`ALSA=1`,
+override with `ALSA=0`) and the PulseAudio one when `libpulse-dev` is
+(`PULSE=1`).
+
+**Use the direct ALSA option on a Pi.** Two reasons, both measured on this one:
+
+* Debian routes ALSA's `default` PCM *through* PulseAudio, so "plain ALSA" is
+  still PulseAudio unless you name a real device.
+* With PulseAudio installed, the app's streams attached to the USB card
+  (`pactl` showed `sink-input ... s16le 1ch 8000Hz`, `Corked: no`) while the
+  sink stayed `SUSPENDED` with the ALSA device `closed` and a 190 s buffer, i.e.
+  PulseAudio accepted writes but never ran the card - even for a direct
+  `pacat`.  `aplay -D plughw:3,0` worked, which is what pointed at ALSA.
+
+The direct back end picks its device itself: the configured device first
+(`audio alsa plughw:3,0`, or `M17WEB_ALSA_DEVICE`), otherwise the first USB/PnP
+card it finds as `plughw:<card>,0` (rate conversion included, so 8 kHz mono
+just works), otherwise `sysdefault`.
+
+Verified on the Pi: with `-a alsa` the state reports
+`audio=alsa alsa={'compiled': True, 'ready': True, 'device': 'plughw:3,0'}`,
+the card's ALSA capture PCM shows `state: RUNNING owner_pid <m17web>`, CPU stays
+around 4%, and switching `alsa -> browser -> alsa` in the UI is picked up live.
+The playback PCM occasionally reports `XRUN` in `mode loop` (audio loopback is
+the one mode that reads and writes the same card at once, so the writer falls a
+fraction of a period behind); the back end re-prepares and continues, and the
+real transmit/receive modes do not read and write simultaneously.
+
 ## Simulated radio (no hardware needed)
 
 `-r sim` loops transmit samples back into the receiver through the same 8x
@@ -171,6 +214,8 @@ Verified on a Raspberry Pi 4 (Debian 13, Codec2 built from source):
 * duplex through the simulator decodes its own transmission with `gerr=0`
 * clean SIGTERM/SIGINT shutdown, including from a browser `q` command
 * both codec back ends work in the app (mode loop and through the modem)
+* the audio device selector works live for browser, direct-ALSA and PulseAudio
+  back ends, including the Pi's USB sound card (see the audio section above)
 
 Also deployed against real hardware: a PlutoSDR (ADALM-PLUTO, fw v0.33,
 reachable at 192.168.2.1 over the USB RNDIS interface ```eth1```).  The web UI

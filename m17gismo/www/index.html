@@ -89,14 +89,19 @@
 
     <div class="card">
       <h2>Audio</h2>
+      <label>audio device
+        <select id="audioselect">
+          <option value="alsa">Raspberry Pi sound card (direct)</option>
+          <option value="browser">browser microphone / speaker</option>
+          <option value="pulse">Raspberry Pi sound card (PulseAudio)</option>
+          <option value="both">browser + Pi sound card</option>
+          <option value="none">mute (no audio)</option>
+        </select>
+      </label>
+      <p class="note" id="audiostatus">checking the Pi sound card&hellip;</p>
       <div class="row">
         <button id="audioenable">enable browser audio</button>
-        <label>backend <select id="audioselect">
-          <option value="browser">browser</option>
-          <option value="pulse">local sound card</option>
-          <option value="both">browser + local</option>
-          <option value="none">mute</option>
-        </select></label>
+        <span class="lbl" id="audiopending"></span>
       </div>
       <div class="row">
         <label class="meter"><span>mic</span><progress id="micbar" max="1" value="0"></progress></label>
@@ -106,7 +111,18 @@
         <label>volume <input id="volume" type="range" min="0" max="1" step="0.05" value="0.8"></label>
         <label class="chk"><input type="checkbox" id="mute"> mute</label>
       </div>
-      <p class="note" id="audionote">Browser audio needs a click to start (browser autoplay rules).</p>
+      <p class="note">
+        <b>Raspberry Pi sound card (direct)</b> talks to the card through ALSA and is
+        the reliable choice on a Pi: it opens the USB/PnP audio card if one is
+        plugged in, otherwise the ALSA default device.  <b>PulseAudio</b> is the same
+        card via the PulseAudio daemon (see <code>pactl info</code>); Debian routes
+        ALSA's <code>default</code> device through PulseAudio, so use the direct
+        option if that daemon misbehaves.  Either way the microphone and speaker
+        plugged into the Pi are used and nothing is needed from this browser.
+        <b>Browser</b> audio needs a secure context: Chrome/Safari only hand over the
+        microphone on <code>https://</code> or <code>localhost</code>, so over a plain
+        <code>http://&lt;pi-address&gt;</code> the Pi sound card is the way to go.
+      </p>
     </div>
   </section>
 

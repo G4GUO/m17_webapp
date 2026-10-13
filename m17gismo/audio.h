@@ -21,8 +21,9 @@
 
 typedef enum {
     AUDIO_NONE = 0,
-    AUDIO_PULSE,
-    AUDIO_BROWSER,
+    AUDIO_ALSA,      // the Pi's sound card, directly through ALSA
+    AUDIO_PULSE,     // the Pi's sound card, through PulseAudio
+    AUDIO_BROWSER,   // microphone/speaker in the web page
     AUDIO_FILE,
     AUDIO_BOTH
 } AudioBackend;
@@ -46,7 +47,33 @@ void audio_output_flush(void);
 double audio_get_mic_level(void);               // 0..1 RMS for the UI meter
 double audio_get_spk_level(void);
 
-// ---- PulseAudio back end (audio_pulse.cpp, needs -lplus-simple) -----------
+// Is a backend change waiting to be applied (takes effect when the audio paths
+// are next opened, i.e. at the next transmit/receive cycle)?
+bool           audio_backend_pending(void);
+// Last error from the active backend, "" if none. e.g. PulseAudio not running.
+const char    *audio_backend_error(void);
+// Which back ends were compiled in, and whether the local sound card streams
+// are actually open (false when PULSE was not compiled in)
+bool           audio_have_pulse(void);
+bool           audio_have_alsa(void);
+bool           audio_local_ready(void);
+const char    *audio_local_device(void);   // e.g. plughw:3,0 for the ALSA path
+bool           audio_have_browser_audio(void);
+
+// ---- ALSA back end (audio_alsa.cpp, needs -lasound) ----------------------
+void audio_alsa_mic_open(void);
+void audio_alsa_mic_close(void);
+void audio_alsa_spk_open(void);
+void audio_alsa_spk_close(void);
+void audio_alsa_input(int16_t *s, int len);
+void audio_alsa_output(int16_t *s, int len);
+void audio_alsa_flush(void);
+bool audio_alsa_ready(void);
+const char *audio_alsa_error(void);
+const char *audio_alsa_device(void);
+void audio_alsa_set_device(const char *dev);
+
+// ---- PulseAudio back end (audio_pulse.cpp, needs -lpulse-simple) -----------
 void audio_pulse_mic_open(void);
 void audio_pulse_mic_close(void);
 void audio_pulse_spk_open(void);
@@ -55,6 +82,7 @@ void audio_pulse_input(int16_t *s, int len);
 void audio_pulse_output(int16_t *s, int len);
 void audio_pulse_flush(void);
 bool audio_pulse_ready(void);
+const char *audio_pulse_error(void);
 
 // ---- Browser back end (audio_web.cpp) -------------------------------------
 void audio_web_mic_open(void);

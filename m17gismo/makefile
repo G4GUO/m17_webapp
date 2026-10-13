@@ -82,11 +82,23 @@ else
 SRCS := $(filter-out radio_sim.cpp,$(SRCS))
 endif
 
-# Audio back ends
+# Audio back ends: ALSA talks to the sound card directly (no PulseAudio in the
+# path), which is the reliable option on a Pi; PULSE goes through PulseAudio.
+ALSA ?= $(shell test -f /usr/include/alsa/asoundlib.h && echo 1 || echo 0)
+
+ifeq ($(ALSA),1)
+CFLAGS   += -DHAVE_ALSA
+CXXFLAGS += -DHAVE_ALSA
+LIBS     += -lasound
+else
+SRCS := $(filter-out audio_alsa.cpp,$(SRCS))
+endif
+
 ifeq ($(PULSE),1)
 CFLAGS   += -DHAVE_PULSE
 CXXFLAGS += -DHAVE_PULSE
-LIBS     += -lpulse-simple
+# -lpulse as well as -lpulse-simple: pa_strerror() lives in the former
+LIBS     += -lpulse-simple -lpulse
 else
 SRCS := $(filter-out audio_pulse.cpp,$(SRCS))
 endif

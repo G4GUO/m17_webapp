@@ -18,6 +18,9 @@
 
 static pa_simple *m_os = NULL;
 static pa_simple *m_is = NULL;
+static char m_error[160];
+
+const char *audio_pulse_error(void) { return m_error; }
 
 static const pa_sample_spec spec = {
 	.format		= PA_SAMPLE_S16LE,
@@ -28,15 +31,27 @@ static const pa_sample_spec spec = {
 bool audio_pulse_ready(void) { return (m_os != NULL) || (m_is != NULL); }
 
 void audio_pulse_mic_open(void){
+	int err = 0;
 	m_is = NULL;
-	m_is = pa_simple_new(NULL, "m17web", PA_STREAM_RECORD, NULL, "m17web", &spec, NULL, NULL, NULL);
-	if (!m_is) printf("Audio Input failed\n");
+	m_is = pa_simple_new(NULL, "m17web", PA_STREAM_RECORD, NULL, "m17web", &spec, NULL, NULL, &err);
+	if (!m_is) {
+		// Report the real reason (usually "Connection refused" = no PulseAudio
+		// daemon) instead of a bare failure that the UI could not show.
+		snprintf(m_error, sizeof(m_error), "microphone: %s", pa_strerror(err));
+		printf("Audio Input failed: %s\n", pa_strerror(err));
+	}
 }
 
 void audio_pulse_spk_open(void){
+	int err = 0;
 	m_os = NULL;
-	m_os = pa_simple_new(NULL, "m17web", PA_STREAM_PLAYBACK, NULL, "m17web", &spec, NULL, NULL, NULL);
-	if (!m_os) printf("Audio Output failed\n");
+	m_os = pa_simple_new(NULL, "m17web", PA_STREAM_PLAYBACK, NULL, "m17web", &spec, NULL, NULL, &err);
+	if (!m_os) {
+		snprintf(m_error, sizeof(m_error), "speaker: %s", pa_strerror(err));
+		printf("Audio Output failed: %s\n", pa_strerror(err));
+	} else {
+		m_error[0] = 0;
+	}
 }
 
 void audio_pulse_mic_close(void){
