@@ -193,6 +193,52 @@ consumption 8010 samples/s against the card's 7986, `tx_drops=0`,
 are `tx_drops` and `tx_overruns` in the state JSON, shown in the UI's Audio
 panel next to the blank-frame setting.
 
+## Running it as a service, and surviving the radio disappearing
+
+The Pluto drops off USB from time to time (it re-enumerated at 20:29 on 13 Oct
+2026) and anything that does not survive that stays dead until somebody notices.
+Run m17web under systemd so it comes back on its own:
+
+```bash
+cd /mnt/hf/shared/projects/m17_sdr_web
+sudo cp m17gismo/tools/m17web.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now m17web
+
+systemctl status m17web           # is it up
+sudo journalctl -u m17web -f      # what it is doing (this is its log now)
+sudo systemctl restart m17web     # restart it by hand
+```
+
+Two things make the recovery work, and both were missing before:
+
+* **The program exits deliberately when the radio has gone.** `pluto_rx_samples()`
+  counts consecutive failed reads and `exit(1)`s after about two seconds of them,
+  with a line in the journal saying why. Without that it would keep running,
+  deaf and mute, with a web interface that still answered - which is exactly
+  what "the program has stopped" looked like from the outside.
+* **The iio calls cannot hang or crash the program.** A failed
+  `iio_buffer_refill()` returns a *negative* value; upstream stored it in an
+  unsigned int, so -1 became ~4 GB and the following `memcpy` **segfaulted**,
+  taking the web UI down with it. The context also had an infinite timeout, so a
+  dead link blocked the sample loop forever. Both are fixed: the return value is
+  checked and clamped, and the timeout is 2 s.
+
+`tools/pi_m17web.sh` still works for a one-off foreground-style run, and now
+says so instead of fighting the service for port 8080 when the service is
+running.
+
+### Checking it is actually working
+
+The state in the web UI carries what you need to tell "silent" from "broken":
+
+| Field | Meaning |
+|---|---|
+| `spk_open`, `mic_open` | which audio streams are really open (the microphone is closed while receiving, by design) |
+| `alsa.error` | only set while the stream it refers to is *closed* - a stale message used to sit there for hours |
+| `tx_drops` | samples of your voice lost while transmitting; 0 is clean, and it resets at each key-down |
+| `tx_overruns` | sound card capture overruns, the usual cause of the first number not being 0 |
+
 ## Audio: which device the voice comes from and goes to
 
 The web UI has an **audio device** selector (the "Audio" panel) plus the

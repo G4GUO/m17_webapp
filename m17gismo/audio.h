@@ -64,6 +64,7 @@ bool           audio_have_browser_audio(void);
 // lost (card overrun, or padded with silence because the source starved) and
 // the number of card overruns behind them.  These make transmit dropouts
 // visible instead of silent.
+void           audio_local_streams(bool *mic, bool *spk);   // what is open right now
 long           audio_tx_dropped(void);
 long           audio_tx_overruns(void);
 
@@ -78,6 +79,8 @@ void audio_alsa_flush(void);
 bool audio_alsa_ready(void);
 long audio_alsa_overruns(void);
 long audio_alsa_starved(void);
+bool audio_alsa_mic_is_open(void);
+bool audio_alsa_spk_is_open(void);
 const char *audio_alsa_error(void);
 const char *audio_alsa_device(void);
 void audio_alsa_set_device(const char *dev);

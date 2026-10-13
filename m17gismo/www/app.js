@@ -137,9 +137,21 @@ function renderAudioStatus(s) {
     } else if (info.error) {
       el.textContent = which + ' problem: ' + info.error;
       el.style.color = 'var(--red)';
-    } else if (info.ready) {
-      el.textContent = 'Pi sound card in use' + (isAlsa ? ' (' + (a.device || 'default') + ')' : ' (PulseAudio)');
-      el.style.color = 'var(--green)';
+    } else if (s.spk_open || s.mic_open || info.ready) {
+      // Report the streams that are really open: the microphone is closed
+      // while receiving, by design, and a failed open can leave an error
+      // string behind even though the speaker came up fine.
+      const dev = isAlsa ? (' (' + (a.device || 'default') + ')') : ' (PulseAudio)';
+      const what = s.spk_open && s.mic_open ? 'speaker and microphone open'
+                 : s.spk_open ? 'speaker open, microphone opens when you transmit'
+                 : s.mic_open ? 'microphone open, speaker not open'
+                 : 'streams opening';
+      el.textContent = 'Pi sound card in use' + dev + ' - ' + what;
+      el.style.color = s.spk_open || s.mic_open ? 'var(--green)' : 'var(--amber)';
+      if (info.error && !s.spk_open) {
+        el.textContent = 'Pi sound card: speaker not open - ' + info.error;
+        el.style.color = 'var(--red)';
+      }
     } else {
       el.textContent = 'Pi sound card (' + which + ') selected - opens at the next ' +
         'transmit/receive cycle';

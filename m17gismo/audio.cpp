@@ -109,6 +109,23 @@ const char *audio_local_device(void) {
     return "";
 }
 
+// Which of the local sound card streams are open right now (the ALSA back end
+// knows exactly; the others report their own readiness).
+void audio_local_streams(bool *mic, bool *spk) {
+    bool m = false, s = false;
+#ifdef HAVE_ALSA
+    if (want_alsa(m_backend)) { m = audio_alsa_mic_is_open(); s = audio_alsa_spk_is_open(); }
+#endif
+    if (want_pulse(m_backend)) {
+#ifdef HAVE_PULSE
+        m = s = audio_pulse_ready();
+#endif
+    }
+    if (want_file(m_backend)) m = s = true;
+    if (mic) *mic = m;
+    if (spk) *spk = s;
+}
+
 long audio_tx_dropped(void) {
     long n = 0;
 #ifdef HAVE_ALSA

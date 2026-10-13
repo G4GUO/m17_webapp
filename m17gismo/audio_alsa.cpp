@@ -36,6 +36,9 @@ static char m_requested[128];
 static char m_used_in[128];
 static char m_used_out[128];
 static char m_error[160];
+static int m_error_stream;   // 1 = microphone, 2 = speaker: what m_error refers to
+static struct timespec m_last_read;      // when the transmitter last asked for audio
+static bool m_have_read;
 static long m_overruns;     // capture overruns: microphone audio the card discarded
 static long m_starved;      // capture samples lost (ring overflow, or padded silence)
 
@@ -55,9 +58,21 @@ static pthread_cond_t  m_cap_cv  = PTHREAD_COND_INITIALIZER;
 static pthread_t m_cap_thread;
 static volatile bool m_cap_run;
 
-const char *audio_alsa_error(void) { return m_error; }
+const char *audio_alsa_error(void) {
+    if (m_error[0] == 0) return "";
+    // The stream may have opened on a later attempt: a failure message for
+    // hardware that is running now is worse than no message at all.
+    if (m_error_stream == 1 && m_in  != NULL) return "";
+    if (m_error_stream == 2 && m_out != NULL) return "";
+    return m_error;
+}
 long audio_alsa_overruns(void) { return m_overruns; }
 long audio_alsa_starved(void)  { return m_starved; }
+
+// What is actually open right now, as opposed to the last error string - the
+// two can disagree if an attempt failed after a stream had already opened.
+bool audio_alsa_mic_is_open(void) { return m_in != NULL; }
+bool audio_alsa_spk_is_open(void) { return m_out != NULL; }
 const char *audio_alsa_device(void) { return m_used_in[0] ? m_used_in : m_requested; }
 
 void audio_alsa_set_device(const char *dev) {
@@ -87,20 +102,26 @@ static bool open_pcm(snd_pcm_t **pcm, const char *dev, snd_pcm_stream_t dir, con
     // A restart can lose a race with the previous instance releasing the card,
     // and a close/open cycle in the radio loop can be a moment too early: retry
     // while the device reports itself busy rather than surfacing a stale error.
+    // Open into a local handle: on failure the caller's pointer must keep
+    // pointing at whatever was already open.  Assigning through it let a failed
+    // retry wipe a working stream, leaving the device open but unreachable.
+    snd_pcm_t *p = NULL;
     int rc = 0;
     for (int attempt = 0; attempt < 6; attempt++) {
-        rc = snd_pcm_open(pcm, dev, dir, 0);
+        rc = snd_pcm_open(&p, dev, dir, 0);
         if (rc >= 0) break;
         if (rc != -EBUSY && rc != -EAGAIN) break;
         usleep(250000);
     }
     if (rc < 0) {
         snprintf(m_error, sizeof(m_error), "%s (%s): %s", what, dev, snd_strerror(rc));
+        m_error_stream = (dir == SND_PCM_STREAM_CAPTURE) ? 1 : 2;
         return false;
     }
+    *pcm = p;
     snd_pcm_hw_params_t *hw;
     snd_pcm_hw_params_alloca(&hw);
-    if ((rc = snd_pcm_hw_params_any(*pcm, hw)) < 0 ||
+    if ((rc = snd_pcm_hw_params_any(p, hw)) < 0 ||
         (rc = snd_pcm_hw_params_set_access(*pcm, hw, SND_PCM_ACCESS_RW_INTERLEAVED)) < 0 ||
         (rc = snd_pcm_hw_params_set_format(*pcm, hw, SND_PCM_FORMAT_S16_LE)) < 0 ||
         (rc = snd_pcm_hw_params_set_channels(*pcm, hw, 1)) < 0) {
@@ -131,6 +152,8 @@ static bool open_pcm(snd_pcm_t **pcm, const char *dev, snd_pcm_stream_t dir, con
         return false;
     }
     snd_pcm_prepare(*pcm);
+    m_error[0] = 0;
+    m_error_stream = 0;
 #ifdef M17WEB_DIAG
     {
         unsigned int got_rate = 0, got_ch = 0;
@@ -187,11 +210,19 @@ static void *cap_drain_thread(void *arg) {
         pthread_mutex_lock(&m_cap_mtx);
         for (int i = 0; i < n; i++) {
             if (m_cap_count >= CAP_RING) {
-                // Nobody has read for two seconds: keep the newest audio and
-                // count what had to go.
+                // Keep the newest audio and let the oldest go.  Only count it
+                // when the transmitter has been reading: the microphone stays
+                // open while receiving, and discarding audio nobody asked for
+                // is not a dropped transmit sample.
                 m_cap_tail = (m_cap_tail + 1) % CAP_RING;
                 m_cap_count--;
-                m_starved++;
+                if (m_have_read) {
+                    struct timespec now;
+                    clock_gettime(CLOCK_MONOTONIC, &now);
+                    long since = (now.tv_sec - m_last_read.tv_sec) * 1000 +
+                                 (now.tv_nsec - m_last_read.tv_nsec) / 1000000;
+                    if (since < 1000) m_starved++;
+                }
             }
             m_cap_ring[m_cap_head] = buf[i];
             m_cap_head = (m_cap_head + 1) % CAP_RING;
@@ -211,6 +242,7 @@ void audio_alsa_mic_open(void) {
         pthread_mutex_lock(&m_cap_mtx);
         m_cap_head = m_cap_tail = m_cap_count = 0;
         pthread_mutex_unlock(&m_cap_mtx);
+        m_have_read = false;
         m_cap_run = true;
 #ifdef M17WEB_DIAG
         fprintf(stdout, "diag-cap: opening capture thread on %s\n", dev);
@@ -269,6 +301,8 @@ void audio_alsa_input(int16_t *s, int len) {
 
     struct timespec t0, t1, ts;
     clock_gettime(CLOCK_MONOTONIC, &t0);
+    m_last_read = t0;
+    m_have_read = true;
     int got = 0;
     while (got < len) {
         pthread_mutex_lock(&m_cap_mtx);

@@ -22,6 +22,8 @@ static struct iio_device *m_rx = NULL;
 static struct iio_device *m_dev_ph = NULL;
 
 static uint32_t m_tx_rx_block_size;
+static uint32_t m_rx_buffer_samples;      // capacity of the receive buffer, in complex samples
+static long m_rx_errors;                  // consecutive failed refills: the radio has gone
 // Is it running ?
 static bool m_pluto_running;
 static bool stop;
@@ -201,6 +203,9 @@ bool cfg_ad9361_streaming_ch(struct iio_context *ctx, struct stream_cfg *cfg, en
 static scmplx m_tx_acc[TX_CHUNK_SAMPLES];
 static int m_tx_acc_n;
 static scmplx *m_tx_buff_ptr;
+static long m_tx_push_errors;             // failed pushes: the radio went away
+
+long pluto_tx_push_errors(void) { return m_tx_push_errors; }
 
 void pluto_tx_flush(void) {
 	m_tx_acc_n = 0;
@@ -220,6 +225,7 @@ void pluto_set_rx_buff_length(uint32_t len) {
 	// Change the size of the buffer
 	if (m_rxbuf) { iio_buffer_destroy(m_rxbuf); m_rxbuf = NULL; }
 	m_rxbuf = iio_device_create_buffer( m_rx, len, false);
+	m_rx_buffer_samples = len;
 	iio_buffer_first(m_rxbuf, m_rx0_i);
 	scmplx *s_b = (scmplx*)iio_buffer_first(m_rxbuf, m_rx0_i);
 	memset(s_b, 0, sizeof(scmplx)*len);
@@ -331,7 +337,10 @@ int pluto_open( uint32_t block_size ){
 	iio_channel_enable(m_rx0_i);
 	iio_channel_enable(m_rx0_q);
 
-	iio_context_set_timeout(m_ctx, 0);
+	// A dead link must not block the sample loop forever: with no timeout an
+	// iio call on a Pluto that has gone away (USB re-enumeration, cable, hub
+	// reset) blocks indefinitely and the program just stops responding.
+	iio_context_set_timeout(m_ctx, 2000);
 	pluto_set_tx_buff_length(block_size);
 	pluto_set_rx_buff_length(block_size);
 	iio_device_set_kernel_buffers_count(m_tx, 4);
@@ -484,7 +493,11 @@ void pluto_tx_samples( scmplx *s, int len) {
 		len -= take;
 		if (m_tx_acc_n >= TX_CHUNK_SAMPLES) {
 			memcpy(m_tx_buff_ptr, m_tx_acc, sizeof(scmplx)*TX_CHUNK_SAMPLES);
-			iio_buffer_push(m_txbuf);
+			if (iio_buffer_push(m_txbuf) < 0) {
+				// The push failing means the radio has gone; keep going and let
+				// the next push (or the supervisor) deal with it.
+				m_tx_push_errors++;
+			}
 			m_tx_acc_n = 0;
 		}
 	}
@@ -494,14 +507,39 @@ void pluto_tx_samples( scmplx *s, int len) {
 //
 uint32_t pluto_rx_samples( scmplx *s ) {
 	if (m_pluto_running == false) return 0;
-	// Get the number of bytes that have been received
-	uint32_t nbytes = iio_buffer_refill(m_rxbuf);
+	// iio_buffer_refill() returns ssize_t and a *negative* error code when the
+	// link fails (the Pluto re-enumerating on USB, for instance).  Storing that
+	// in an unsigned int turned -1 into ~4 GB, and the memcpy below then ran off
+	// the end of everything and segfaulted - which is how a momentary USB
+	// disconnect was taking the whole program, web UI included, down with it.
+	ssize_t nbytes = iio_buffer_refill(m_rxbuf);
+	if (nbytes <= 0) {
+		// Two seconds of failed reads means the link is really gone (the Pluto
+		// re-enumerating on USB, typically).  Restarting is the only sensible
+		// recovery - the iio context cannot be reused - and the systemd unit
+		// has Restart=always, so exit rather than sit there deaf and mute with
+		// a web interface that still answers.  This is also the message that
+		// was missing when the program simply vanished.
+		static ssize_t last_error;
+		last_error = nbytes;
+		if (++m_rx_errors >= 100) {
+			fprintf(stderr, "m17web: %ld consecutive radio read failures (iio error %ld) - "
+			                "restarting to re-open the radio\n", m_rx_errors, (long)last_error);
+			fflush(stderr);
+			exit(1);
+		}
+		return 0;
+	}
+	m_rx_errors = 0;
+	if (nbytes > (ssize_t)(sizeof(scmplx) * m_rx_buffer_samples))
+		nbytes = (ssize_t)(sizeof(scmplx) * m_rx_buffer_samples);
 	// Get position of first sample in the buffer
 	scmplx *s_b = (scmplx*)iio_buffer_first(m_rxbuf, m_rx0_i);
+	if (s_b == NULL) return 0;
     // Copy the bytes
-	memcpy(s, s_b, nbytes);
+	memcpy(s, s_b, (size_t)nbytes);
 	// return the length
-	return nbytes/sizeof(scmplx);// Convert to IQ samples
+	return (uint32_t)(nbytes/sizeof(scmplx));// Convert to IQ samples
 }
 void pluto_transmit(void){
     iio_device_debug_attr_write(m_dev_ph,"direct_reg_access","0x27 0x10");

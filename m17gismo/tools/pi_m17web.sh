@@ -46,6 +46,13 @@ EOF
 
 case "${1:-status}" in
 start)
+    # If systemd is managing m17web, do not fight it for the port.
+    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet m17web 2>/dev/null; then
+        echo "m17web is running as the systemd service 'm17web'."
+        echo "  sudo systemctl stop m17web      # then use this script, or"
+        echo "  sudo systemctl restart m17web   # restart it under systemd"
+        exit 1
+    fi
     shift || true
     prepare
     if pgrep -F "$PIDF" >/dev/null 2>&1; then

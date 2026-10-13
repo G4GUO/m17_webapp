@@ -1,0 +1,40 @@
+# m17web as a supervised service.
+#
+# Install on the Pi (from the repository root):
+#   sudo cp m17gismo/tools/m17web.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now m17web
+#
+# Then: systemctl status m17web | journalctl -u m17web -f | systemctl restart m17web
+#
+# Restart=always is the point of it: the Pluto disappears and re-appears on USB
+# from time to time (it did at 20:29 on 13 Oct 2026), and without supervision a
+# program that does not survive that stays dead until somebody notices.
+#
+[Unit]
+Description=m17web - M17 digital voice over SDR (web interface)
+Documentation=file:///mnt/hf/shared/projects/m17_sdr_web/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=charles
+Group=charles
+WorkingDirectory=/mnt/hf/shared/projects/m17_sdr_web/m17gismo
+# The Pluto presents itself as a USB network interface: give it its address
+# before starting, and ignore failure if it is already configured.
+ExecStartPre=-/usr/bin/ip link set eth1 up
+ExecStartPre=-/usr/bin/ip addr add 192.168.2.2/24 dev eth1
+ExecStartPre=/bin/sleep 3
+# -r pluto: the real radio (use -r sim to practise without one)
+# -a alsa:  the Pi's sound card, directly (see the README on the sound card)
+ExecStart=/mnt/hf/shared/projects/m17_sdr_web/m17gismo/m17web -r pluto -w 8080 -a alsa
+Restart=always
+RestartSec=5
+# Output goes to the journal: journalctl -u m17web -f
+# (systemd refuses StandardOutput=append:/tmp/... here - it cannot set up the
+# redirect for the child processes and the unit aborts with 209/STDOUT.)
+
+[Install]
+WantedBy=multi-user.target
