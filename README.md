@@ -170,6 +170,8 @@ Override the auto-detection when needed:
 
     gps                      # device, speed, status, fix and locator
     gps /dev/ttyACM1 38400   # a specific device and speed
+    gps meta off             # keep using the receiver, but announce nothing
+    gps meta on              # announce the position again (the default)
 
 `M17WEB_GPS=/dev/ttyACM1` does the same at startup.  If the receiver is unplugged
 and plugged back in, the reader reopens it by itself.
@@ -186,7 +188,15 @@ and plugged back in, the reader reopens it by itself.
   the META field carries; the program sets them to `0b01` (GNSS position) while
   the fix is fresh and clears them back to `0b00` when it is stale, so a stale
   position is never announced.  META travels in the LICH, part of the LSF that
-  repeats every superframe, so the position is refreshed at superframe boundaries
+  repeats every superframe, so the position is refreshed at superframe boundaries* **The position can be kept off the air.**  `gps meta off`, or unticking
+  *announce position on air* in the Position panel, stops the position being sent
+  in the META field while leaving the receiver running - the locator, the compass
+  and the CSV log all still work.  The setting is kept in `config.txt`, so it
+  survives a restart.  Worth knowing either way: while it is on, your position is
+  public, appearing in the *Location* column of the reflector's own dashboard and
+  in any client that displays META (OpenRTX shows the locator).
+  `tools/gnss_meta_test.sh` proves the switch works, by looping a transmission
+  back through a simulator and checking what the station hears itself announce.
   and at most once every 5 s - the rate at which the specification says a
   receiver may be expected to notice a change.
 * **Received positions are decoded too:** another station sending its position

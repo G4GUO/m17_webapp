@@ -223,6 +223,8 @@ function renderPosition(s) {
 
   // The position log (CSV) tick box and its state
   const csv = g.csv || {};
+  const mt = $('metatick');
+  if (mt) mt.checked = !!g.meta;
   const cb = $('csvtick');
   if (document.activeElement !== cb) cb.checked = !!csv.on;
   $('csvstate').textContent = csv.path
@@ -232,8 +234,14 @@ function renderPosition(s) {
     : '';
 
   const flag = $('gnssflag');
-  flag.textContent = g.tx ? 'position sent' : (g.valid ? 'position ready' : 'not sent');
-  flag.className = 'badge' + (g.tx ? ' ok' : (g.valid ? ' sig' : ''));
+  if (g.meta === false) {
+    // The switch is off: say that, rather than implying anything is being sent.
+    flag.textContent = 'position off air';
+    flag.className = 'badge';
+  } else {
+    flag.textContent = g.tx ? 'position sent' : (g.valid ? 'position ready' : 'no fix');
+    flag.className = 'badge' + (g.tx ? ' ok' : (g.valid ? ' sig' : ''));
+  }
 }
 
 // The compass: a needle pointing at the bearing to the station being heard, and a
@@ -436,6 +444,8 @@ function wire() {
 
   $('audioselect').onchange = (e) => cmd('audio ' + e.target.value);
   $('csvtick').onchange = (e) => cmd('csv ' + (e.target.checked ? 'on' : 'off'));
+  if ($('metatick'))
+    $('metatick').onchange = (e) => cmd('gps meta ' + (e.target.checked ? 'on' : 'off'));
 
   document.querySelectorAll('input[name=mode]').forEach((r) => {
     r.onchange = () => { if (r.checked) cmd('mode ' + r.value); };

@@ -358,6 +358,8 @@ void m17_send_preamble(void);
 void m17_update_meta(uint8_t *meta);
 int  m17_tx_lich_index(void);
 bool m17_tx_gnss(void);
+bool m17_tx_gnss_enabled(void);
+void m17_tx_set_gnss_enabled(bool on);
 
 void m17_send_link_setup_frame(uint48_t dest, uint48_t src, M17Type type, uint8_t *meta);
 void m17_send_link_setup_frame_to_net(uint48_t dest, uint48_t src, M17Type type, uint8_t *meta);

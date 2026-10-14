@@ -34,7 +34,7 @@ from reportlab.platypus import (
 
 TITLE = "m17web User Manual"
 SUBTITLE = "M17 digital voice on a Raspberry Pi with an SDR, driven from your web browser"
-VERSION = "Version 1.1 \u2014 " + date.today().strftime("%d %B %Y")
+VERSION = "Version 1.2 \u2014 " + date.today().strftime("%d %B %Y")
 
 MARGIN = 2.7 * cm                 # ~87 characters per line: comfortable for body text
 FRAME_W = A4[0] - 2 * MARGIN      # usable width between the margins
@@ -306,17 +306,23 @@ def build(path: str) -> None:
         ["satellites / HDOP / altitude", "How good the fix is. Six or more satellites and an HDOP below "
                                          "about 2 means a good one. Altitude is in metres."],
         ["copy locator", "Puts the locator on the clipboard, ready to paste into a log or a message."],
-        ["position ready / position sent", "Whether your position is being sent with your transmissions. "
-                                           "It is sent only while the fix is fresh, about every 5 seconds."],
+        ["position ready / position sent / position off air", "Whether your position is being sent with "
+                                           "your transmissions. It is sent only while the fix is fresh, about "
+                                           "every 5 seconds; it reads <b>position off air</b> when you have "
+                                           "switched the sending off."],
         ["the compass", "The bearing to the station you are hearing, with the distance in kilometres. "
                         "The red needle points at them; the small yellow mark is the direction they say "
                         "they are travelling. It needs a fix of your own to work."],
         ["heard G4ABC ...", "The position another station sent, with its locator and how long ago it was "
                             "received."],
     ], [2.3, 5.7])
-    m.note("Your own position is sent to other stations as part of the M17 link setup, so only send it if "
-           "you are happy for it to be public. If you would rather not, unplug the GPS receiver: the rest "
-           "of the program does not care whether there is one.")
+    m.note("Your own position is sent to other stations as part of the M17 link setup, so send it only if "
+           "you are happy for it to be public - it appears in the Location column of the reflector's own "
+           "dashboard, and in any client that displays it. If you would rather not, untick <b>announce "
+           "position on air</b> in the Position panel, or give the command <b>gps meta off</b>. The receiver "
+           "keeps working either way, so the locator, the compass and the position log are unaffected, and "
+           "the setting is remembered when you next start the program. Unplugging the receiver also works, "
+           "if you want no position at all.")
 
     m.h2("Keeping a log of your position")
     m.p("Tick <b>log to CSV</b> in the Position panel and a row is added to a file every few seconds, "
@@ -510,6 +516,9 @@ def build(path: str) -> None:
         ["lead 4", "Blank codec frames sent before the voice - see section 7."],
         ["gps", "Show the GPS receiver, the fix and your locator. <b>gps /dev/ttyACM1 38400</b> uses a "
                 "different receiver."],
+        ["gps meta off", "Stop sending your position to other stations; <b>gps meta on</b> starts again. The "
+                         "receiver keeps running, so the locator, the compass and the log are unaffected - "
+                         "see section 5."],
         ["csv on / csv off", "Start or stop logging your position to a file - see section 5."],
         ["csv 10", "Log a row every 10 seconds rather than every 5."],
         ["csv status", "Show the log file and how many rows it holds."],

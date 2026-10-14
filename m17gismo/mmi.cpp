@@ -25,8 +25,9 @@ void pad_address(const char *ain, char *aout){
 // the console takes, one per line, so its "mode" line is replaced in place.
 // Writing a temporary file and renaming it means a failure part way through
 // cannot leave a half written config behind.
-static void save_mode_to_config(const char *mode){
-	char line[256];
+static void save_line_to_config(const char *key, const char *line){
+	char buf[256];
+	size_t klen = strlen(key);
 	const char *tmp = "config.txt.tmp";
 	FILE *in  = fopen("config.txt","r");
 	FILE *out = fopen(tmp,"w");
@@ -36,26 +37,33 @@ static void save_mode_to_config(const char *mode){
 		return;
 	}
 	if(in != NULL){
-		while(fgets(line, sizeof(line), in) != NULL){
-			char *p = line;
-			while(*p == ' ' || *p == '\t') p++;
-			if(strncmp(p,"mode",4) == 0 && (p[4] == ' ' || p[4] == '\t')){
+		while(fgets(buf, sizeof(buf), in) != NULL){
+			char *p = buf;
+			while(*p == ' ' || *p == '	') p++;
+			if(strncmp(p, key, klen) == 0 &&
+			   (p[klen] == ' ' || p[klen] == '	' || p[klen] == '\n')){
 				if(wrote == false){
-					fprintf(out, "mode %s\n", mode);
+					fprintf(out, "%s\n", line);
 					wrote = true;
 				}
 				continue;                       // the old line is dropped
 			}
-			fputs(line, out);
+			fputs(buf, out);
 		}
 		fclose(in);
 	}
-	if(wrote == false) fprintf(out, "mode %s\n", mode);   // not there: add it
+	if(wrote == false) fprintf(out, "%s\n", line);        // not there: add it
 	fclose(out);
 	if(rename(tmp, "config.txt") != 0)
 		printf("m17web: could not replace config.txt\n");
 	else
-		printf("m17web: mode %s kept for the next start\n", mode);
+		printf("m17web: %s kept for the next start\n", line);
+}
+
+static void save_mode_to_config(const char *mode){
+	char line[64];
+	snprintf(line, sizeof(line), "mode %s", mode);
+	save_line_to_config("mode", line);
 }
 
 void mmi_parse(char *cmd){
@@ -241,9 +249,22 @@ void mmi_parse(char *cmd){
 			printf("  status   %s\n", gps_status());
 			printf("  position %s  locator %s\n", st, grid);
 			printf("  altitude %d m\n", (int)m_gps.alt);
-			printf("  sent in META %s\n", m17_tx_gnss() ? "yes" : "no");
+			printf("  position in META %s\n", m17_tx_gnss_enabled()
+			       ? (m17_tx_gnss() ? "on, announced" : "on, waiting for a fix")
+			       : "off");
 			printf("  CSV log %s (%d rows in %s)\n\r",
 			       gps_csv_on() ? "on" : "off", gps_csv_rows(), gps_csv_path());
+		} else if(strcmp(token[1],"meta") == 0){
+			// Whether our position goes out in the META field.  Off means the
+			// receiver still runs (locator, compass, CSV) but nothing is announced.
+			bool on = !(nt > 2 && (strcasecmp(token[2],"off") == 0 || strcmp(token[2],"0") == 0));
+			if(nt == 2){
+				printf("position in META is %s\n\r", m17_tx_gnss_enabled() ? "on" : "off");
+			} else {
+				m17_tx_set_gnss_enabled(on);
+				save_line_to_config("gps meta", on ? "gps meta on" : "gps meta off");
+				printf("position in META %s\n\r", on ? "on" : "off");
+			}
 		} else {
 			gps_close();
 			gps_set_device(token[1], nt > 2 ? atoi(token[2]) : 0);

@@ -60,6 +60,7 @@ static pthread_mutex_t m_lead_mtx = PTHREAD_MUTEX_INITIALIZER;
 // a receiver may only be expected to notice a change that often.
 // ---------------------------------------------------------------------------
 static volatile bool m_gnss_tx;               // GNSS is in the META field
+static volatile bool m_gnss_enable = true;    // the operator allows it on the air
 static uint32_t      m_gnss_tx_ms;            // when it was last written
 
 static uint32_t tx_now_ms(void){
@@ -69,6 +70,16 @@ static uint32_t tx_now_ms(void){
 }
 
 static void m17_tx_meta_from_gps(bool force){
+    if (!m_gnss_enable) {
+        // Switched off from the console or the page: drop the position from the
+        // META field so it stops being announced from the next frame onwards.
+        if (m_gnss_tx) {
+            memset(m_meta, 0, sizeof(m_meta));
+            m_type.est = META_TEXT;
+            m_gnss_tx = false;
+        }
+        return;
+    }
     if (!gps_fix_fresh(30000)) {
         // No usable fix: announce nothing rather than a stale position.
         if (m_gnss_tx) {
@@ -89,6 +100,15 @@ static void m17_tx_meta_from_gps(bool force){
 
 bool m17_tx_gnss(void){
     return m_gnss_tx;
+}
+
+bool m17_tx_gnss_enabled(void){
+    return m_gnss_enable;
+}
+
+void m17_tx_set_gnss_enabled(bool on){
+    m_gnss_enable = on;
+    if (!on) m17_tx_meta_from_gps(true);   // clear it now, do not wait for a frame
 }
 
 int  m17_tx_lead_frames(void) { return m_tx_lead_frames; }

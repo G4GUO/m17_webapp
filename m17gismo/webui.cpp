@@ -59,7 +59,6 @@ static char  m_ptt[4]   = "RX";
 static char  m_mode[16] = "gate";
 static char  m_src[16]  = "        ";
 static char  m_dst[16]  = "        ";
-static char  m_gate[16] = "        ";
 static double m_signal, m_power;
 static bool  m_in_frame;
 // Written by the signal handler, read by the command loop in another thread:
@@ -281,12 +280,13 @@ static void build_state(char *out, int len) {
                 o = json_add(out, len, o, "}");
             }
         }
-        o = json_add(out, len, o, ",\"gps\":{\"valid\":%s,\"fresh\":%s,\"tx\":%s,\"lat\":%.6f,\"lon\":%.6f,"
+        o = json_add(out, len, o, ",\"gps\":{\"valid\":%s,\"fresh\":%s,\"tx\":%s,\"meta\":%s,\"lat\":%.6f,\"lon\":%.6f,"
                      "\"grid\":\"%s\",\"alt_m\":%d,\"speed_kmh\":%.1f,\"course\":%d,\"hdop\":%.2f,"
                      "\"sats\":%d,\"age_s\":%.1f,\"status\":\"%s\","
                      "\"csv\":{\"on\":%s,\"path\":\"%s\",\"rows\":%d,\"interval\":%d}}",
                      m_gps.valid ? "true" : "false", fresh ? "true" : "false",
                      m17_tx_gnss() ? "true" : "false",
+                     m17_tx_gnss_enabled() ? "true" : "false",
                      m_gps.lat, m_gps.lon, grid, (int)m_gps.alt, m_gps.speed_kmh, (int)m_gps.course,
                      m_gps.hdop, (int)m_gps.nsats, gps_fix_age_ms() / 1000.0, dev,
                      gps_csv_on() ? "true" : "false", gps_csv_path(),
@@ -322,9 +322,20 @@ static void push_state(void) {
     // than a browser needs.  The tick callback guarantees a refresh anyway.
     long now = now_ms();
     if (m_last_state_ms != 0 && (now - m_last_state_ms) < STATE_MIN_MS) return;
-    char st[1600];
+    char st[4096];
     build_state(st, sizeof(st));
-    ws_broadcast_text(m_srv, st);
+    // json_add truncates rather than overrunning, so a state that outgrew its
+    // buffer would go out as broken JSON and every browser would ignore it
+    // (the page then sits frozen, showing nothing).  Never send that: say so in
+    // the log, and send a valid message carrying no fields.
+    size_t sl = strlen(st);
+    if (sl == 0 || st[sl - 1] != '}') {
+        printf("m17web: state message outgrew its buffer (%d bytes) - report this\n", (int)sizeof(st));
+        fflush(stdout);
+        ws_broadcast_text(m_srv, "{\"t\":\"state\"}");
+    } else {
+        ws_broadcast_text(m_srv, st);
+    }
     const M17_Dbase *db = m17_get_db();
     m_frames_seen = db->n_frames;
     m_last_state_ms = now;
@@ -368,9 +379,16 @@ static void send_hello(int id) {
     }
     pthread_mutex_unlock(&m_log_mtx);
 
-    char st[1600];
+    char st[4096];
     build_state(st, sizeof(st));
-    ws_send_text(m_srv, id, st);
+    size_t sl = strlen(st);
+    if (sl == 0 || st[sl - 1] != '}') {
+        printf("m17web: state message outgrew its buffer (%d bytes) - report this\n", (int)sizeof(st));
+        fflush(stdout);
+        ws_send_text(m_srv, id, "{\"t\":\"state\"}");
+    } else {
+        ws_send_text(m_srv, id, st);
+    }
 }
 
 static void web_on_open(const WsClientInfo *ci, void *user) {
