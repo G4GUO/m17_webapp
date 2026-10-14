@@ -192,7 +192,34 @@ static void build_state(char *out, int len) {
         default: ptt_now = "RX"; break;
     }
     o = json_add(out, len, o, ",\"mode\":\"%s\",\"ptt\":\"%s\"", mode, ptt_now);
-    o = json_add(out, len, o, ",\"src\":\"%s\",\"dst\":\"%s\",\"gate\":\"%s\"", m_src, m_dst, gate);
+    {
+        // "src" is what THIS station transmits with, and must not change when a
+        // station is received: gui_save_src_address() is called by the receive
+        // path, the reflector path and the transmit path alike, so the old
+        // single variable showed the station being heard in the callsign box -
+        // which is the box that sets what we transmit with.
+        char my_src[16], rx_src[16], my_dst[16];
+        if (db->tx_src_add[0]) {
+            snprintf(my_src, sizeof(my_src), "%.9s", db->tx_src_add);
+            for (char *q = my_src; *q; q++) *q = (char)toupper((unsigned char)*q);
+        } else {
+            decode_addr(db->tx_src, my_src, sizeof(my_src));
+        }
+        for (char *q = my_src; *q; q++) if (q[0] == ' ' && q[1] == 0) { *q = 0; break; }
+        if (db->rx_src_add[0]) {
+            snprintf(rx_src, sizeof(rx_src), "%.9s", db->rx_src_add);
+            for (char *q = rx_src; *q; q++) *q = (char)toupper((unsigned char)*q);
+        } else {
+            decode_addr(db->rx_src, rx_src, sizeof(rx_src));
+        }
+        for (char *q = rx_src; *q; q++) if (q[0] == ' ' && q[1] == 0) { *q = 0; break; }
+        // The destination display is set by the interface; when it has nothing
+        // to say, report what the database actually holds.
+        snprintf(my_dst, sizeof(my_dst), "%s", (m_dst[0] && m_dst[0] != ' ') ? m_dst : "");
+        if (!my_dst[0]) decode_addr(db->tx_dest, my_dst, sizeof(my_dst));
+        o = json_add(out, len, o, ",\"src\":\"%s\",\"rx_src\":\"%s\",\"dst\":\"%s\",\"gate\":\"%s\"",
+                     my_src, rx_src, my_dst, gate);
+    }
     o = json_add(out, len, o, ",\"rx_freq\":%llu,\"tx_freq\":%llu",
                  (unsigned long long)db->rx_freq, (unsigned long long)db->tx_freq);
     o = json_add(out, len, o, ",\"rx_gain\":%.3f,\"tx_gain\":%.3f", radio_get_rx_gain(), radio_get_tx_gain());

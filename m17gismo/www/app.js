@@ -81,8 +81,10 @@ function applyState(s) {
   led.textContent = s.ptt || 'RX';
   led.className = 'led' + (s.ptt === 'TX' ? ' tx' : s.ptt === 'DX' ? ' dx' : '');
 
+  // The station being received belongs here, not in the callsign box
   const fi = $('frameind');
-  fi.textContent = s.in_frame ? 'in frame' : 'no signal';
+  const rx = (s.rx_src || '').trim();
+  fi.textContent = s.in_frame ? (rx ? 'in frame: ' + rx : 'in frame') : 'no signal';
   fi.className = 'badge' + (s.in_frame ? ' sig' : '');
 
   $('signalbar').value = s.signal || 0;
