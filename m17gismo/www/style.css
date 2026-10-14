@@ -57,6 +57,11 @@ button.mini { font-size: .8rem; padding: .25rem .5rem; }
 /* The receive and transmit controls stack, with short sliders: side by side in a
    wide card, the gain sliders stretch across the whole card. */
 .radio-stack { display: flex; flex-direction: column; gap: .4rem; }
+
+/* Reflector: a picker for the list, and a field for anything not in it.  A
+   datalist alone only suggests entries while you are typing, which loses the
+   clickable list Firefox users expect. */
+.refrow { display: flex; flex-direction: column; gap: .3rem; }
 .radio-stack input[type=range] { max-width: 11rem; }
 .radio-stack label { max-width: 20rem; }
 

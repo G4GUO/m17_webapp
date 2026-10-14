@@ -319,13 +319,19 @@ function renderTxHealth(s) {
 // picked from. Anything may be entered: m17_net.cpp matches the designator in
 // M17Hosts.txt with or without the leading "M17-".
 function fillRefs(names) {
-  const dl = $('reflist');
+  const dl = $('reflist'), sel = $('refsel');
   dl.innerHTML = '';
+  const keep = sel.value;
+  sel.innerHTML = '<option value="">&mdash; pick a reflector &mdash;</option>';
   for (const n of names) {
-    const o = document.createElement('option');
+    const o = document.createElement('option');       // for typing
     o.value = n;
     dl.appendChild(o);
+    const s = document.createElement('option');       // for clicking
+    s.value = n; s.textContent = n;
+    sel.appendChild(s);
   }
+  if (keep) sel.value = keep;
 }
 
 // ---------------------------------------------------------------------------
@@ -408,6 +414,11 @@ function wire() {
   document.querySelectorAll('input[name=mode]').forEach((r) => {
     r.onchange = () => { if (r.checked) cmd('mode ' + r.value); };
   });
+
+  // Picking from the list fills the name field, which is what connect sends
+  $('refsel').onchange = () => {
+    if ($('refsel').value) $('refname').value = $('refsel').value;
+  };
 
   $('copygrid').onclick = () => {
     const t = $('grid').textContent.trim();
