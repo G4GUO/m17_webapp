@@ -180,7 +180,16 @@ static void build_state(char *out, int len) {
 
     int o = 0;
     o = json_add(out, len, o, "{\"t\":\"state\",\"radio\":\"%s\"", radio_name());
-    o = json_add(out, len, o, ",\"mode\":\"%s\",\"ptt\":\"%s\"", mode, m_ptt);
+    // The transmitter state as the radio sees it, so a key press from the
+    // hardware switch or a reflector shows up in the interface too.
+    const char *ptt_now = m_ptt;
+    switch (m17_txrx_ptt_state()) {
+        case 1:  ptt_now = "TX"; break;
+        case 2:  ptt_now = "DX"; break;
+        case 3:  ptt_now = "CA"; break;
+        default: ptt_now = "RX"; break;
+    }
+    o = json_add(out, len, o, ",\"mode\":\"%s\",\"ptt\":\"%s\"", mode, ptt_now);
     o = json_add(out, len, o, ",\"src\":\"%s\",\"dst\":\"%s\",\"gate\":\"%s\"", m_src, m_dst, gate);
     o = json_add(out, len, o, ",\"rx_freq\":%llu,\"tx_freq\":%llu",
                  (unsigned long long)db->rx_freq, (unsigned long long)db->tx_freq);
@@ -252,6 +261,23 @@ static void build_state(char *out, int len) {
                      m_gps.hdop, (int)m_gps.nsats, gps_fix_age_ms() / 1000.0, dev,
                      gps_csv_on() ? "true" : "false", gps_csv_path(),
                      gps_csv_rows(), gps_csv_interval());
+    }
+    {
+        // Hardware PTT on the Pi's header (see rpi_gpio.cpp)
+        char gerr[200];
+        snprintf(gerr, sizeof(gerr), "%s", rpi_gpio_error());
+        for (char *q = gerr; *q; q++) if (*q == '"' || *q == '\\') *q = '-';
+        o = json_add(out, len, o, ",\"gpio\":{\"built\":%s,\"ok\":%s,\"pressed\":%s,\"hw_tx\":%s,"
+                     "\"out\":%d,\"in\":%d,\"error\":\"%s\"}",
+#ifdef HAVE_GPIOD
+                     "true",
+#else
+                     "false",
+#endif
+                     rpi_gpio_ok() ? "true" : "false",
+                     rpi_gpio_pressed() ? "true" : "false",
+                     m17_tx_hw_ptt() ? "true" : "false",
+                     rpi_gpio_out_pin(), rpi_gpio_in_pin(), gerr);
     }
     o = json_add(out, len, o, ",\"clients\":%d", m_srv ? ws_client_count(m_srv) : 0);
     o = json_add(out, len, o, ",\"rx_stream\":%lu", (unsigned long)(db->n_frames - m_frames_seen));

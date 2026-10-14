@@ -122,9 +122,18 @@ SRCS := $(filter-out ui_console.cpp,$(SRCS))
 endif
 
 # GPIO PTT (Raspberry Pi).  Harmless elsewhere: the pins are only touched when
-# a real radio back end is in use.
+# a real radio back end is in use.  The legacy /sys/class/gpio interface is
+# closed on current kernels (export returns EINVAL even as root), so this needs
+# libgpiod's character device: without the header the code still builds, but
+# reports that hardware PTT is unavailable.
+GPIOD ?= $(shell test -f /usr/include/gpiod.h && echo 1 || echo 0)
 CFLAGS   += -DHAVE_RPI_GPIO
 CXXFLAGS += -DHAVE_RPI_GPIO
+ifeq ($(GPIOD),1)
+CFLAGS   += -DHAVE_GPIOD
+CXXFLAGS += -DHAVE_GPIOD
+LIBS     += -lgpiod
+endif
 
 # ---------------------------------------------------------------------------
 # Codec2 back end

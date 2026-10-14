@@ -14,7 +14,7 @@
 #include "m17defines.h"
 
 static uint8_t m_meta[16];
-static pthread_t m_m17_threads[2];
+static pthread_t m_m17_threads[3];   // radio, command loop, hardware PTT
 static RadioType m_radio_type;
 
 #define VERSION "1.0-web"
@@ -167,6 +167,12 @@ int main( int c, char **argv ){
     {
         printf("Unable to start m17 net threads\n");
         return(0);
+    }
+
+	// Poll the hardware PTT switch: a no-op on a station without one
+	if(pthread_create( &m_m17_threads[2], NULL, m17_txrx_ptt_thread, NULL ) != 0 )
+    {
+        printf("Unable to start the hardware PTT thread\n");
     }
 
 	// For the web UI this waits for a browser 'q' or a signal; for the console

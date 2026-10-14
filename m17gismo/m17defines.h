@@ -479,6 +479,16 @@ bool m17_db_in_frame(void);
 void m17_ptt(bool ptt);
 
 // PTT access via gpio
+// Hardware PTT: the switches on the Raspberry Pi header (see rpi_gpio.cpp)
+bool rpi_gpio_ok(void);           // both GPIO lines are claimed
+bool rpi_gpio_pressed(void);      // last reading of the PTT input
+int  rpi_gpio_out_pin(void);      // the keying output (BCM number)
+int  rpi_gpio_in_pin(void);       // the PTT input (BCM number)
+const char *rpi_gpio_error(void); // why it is unusable, blank when fine
+void *m17_txrx_ptt_thread(void *arg);   // polls it and drives the transmitter
+bool m17_tx_hw_ptt(void);         // the hardware is what keyed the station
+int  m17_txrx_ptt_state(void);    // 0 RX, 1 TX, 2 duplex, 3 carrier
+
 void rpi_tx( void );
 void rpi_rx( void );
 bool rpi_read_ptt(void);

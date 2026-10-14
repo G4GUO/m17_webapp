@@ -301,6 +301,59 @@ consumption 8010 samples/s against the card's 7986, `tx_drops=0`,
 are `tx_drops` and `tx_overruns` in the state JSON, shown in the UI's Audio
 panel next to the blank-frame setting.
 
+## Hardware PTT on the Pi's header
+
+A switch on the Raspberry Pi's 40 pin header can key the station, so a hand
+microphone, a foot switch or a home made PTT box works without touching the
+browser:
+
+| Signal | BCM | Header pin | Behaviour |
+|---|---|---|---|
+| PTT input | GPIO 11 | pin 23 | a switch **to ground**; read with the internal pull-up, so pressed reads low |
+| Keying output | GPIO 10 | pin 19 | driven **high** while transmitting (3.3 V - use a transistor for anything bigger) |
+
+Pressing the switch transmits exactly as the button in the web interface does:
+the transmitter indicator follows either source, because the state now reports
+the transmitter as the radio sees it rather than as the last command left it.
+Releasing returns to receive, but only if the hardware was what keyed the
+station, so a release cannot cancel a transmission started from the browser.
+
+Two things had to be fixed for this to work at all:
+
+* **The pins are driven with libgpiod through `/dev/gpiochip0`** (`sudo apt
+  install libgpiod-dev`), not the legacy `/sys/class/gpio` interface.  That
+  interface is closed on current kernels - writing to `/sys/class/gpio/export`
+  returns `EINVAL` even as root - which is why the pins could never be exported.
+* **Nothing polled the switch.**  `radio_keyed()` knew how to read it (and
+  upstream's version always called the Lime function, so a Pluto station could
+  never see its own PTT line), but no thread ever called it.  One now reads it
+  every 25 ms.
+
+Without libgpiod the program still builds and runs, and the interface says
+"hardware PTT not built in" rather than showing a pin state.  `charles` is in the
+`gpio` group, so claiming the lines needs no root.  Note that GPIO 10 and 11 are
+the SPI0 MOSI and SCLK pins: enabling an SPI device would take them away.
+
+Both the claim and the keying can be checked from the hardware side:
+
+```bash
+gpioinfo | grep -A1 '"GPIO1[01]"'
+#   line 10: "GPIO10"  output consumer="m17web"
+#   line 11: "GPIO11"  input active-low bias=pull-up consumer="m17web"
+pinctrl get 10        # while transmitting: "10: op -- pd | hi"
+```
+
+Without a switch to hand, a press can be simulated by moving the pin's internal
+pull, which is the same register a real switch pulls against:
+
+```bash
+pinctrl set 11 ip pd    # reads low = pressed: the station transmits
+pinctrl set 11 ip pu    # released again
+```
+
+The interface shows the switch state under the push to talk button
+(`hardware PTT: GPIO 11 ready · keys GPIO 10`, red while pressed).
+
 ## Running it as a service, and surviving the radio disappearing
 
 The Pluto drops off USB from time to time (it re-enumerated at 20:29 on 13 Oct

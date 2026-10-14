@@ -12,7 +12,7 @@
 typedef enum{PTT_RX,PTT_TX,PTT_CA,PTT_DP}PttType;
 typedef enum{STATE_RX,STATE_TX,STATE_DP}NetState;
 
-static PttType m_ptt;
+static volatile PttType m_ptt;        // set from the web UI and the hardware PTT thread
 static struct CODEC2 *m_codec2;
 static int m_nsam;
 static int16_t m_amicsamples[160];
@@ -464,6 +464,58 @@ void m17_txrx_set_meta(uint8_t *meta){
 //
 // Go to transmit
 //
+// ---------------------------------------------------------------------------
+// Hardware PTT
+//
+// radio_keyed() reports whether the physical switch on the Pi's header is
+// pressed (see rpi_gpio.cpp).  Nothing used to poll it, which is why the
+// hardware PTT never worked.  This thread polls it every 25 ms and drives the
+// transmitter exactly as the button in the web interface does.  It only unkeys
+// when the hardware was what keyed the station, so releasing the switch cannot
+// cancel a transmission that was started from the browser.
+// ---------------------------------------------------------------------------
+static volatile bool m_hw_keyed;
+
+bool m17_tx_hw_ptt(void) {
+    return m_hw_keyed;
+}
+
+int m17_txrx_ptt_state(void) {
+    switch (m_ptt) {
+        case PTT_TX: return 1;
+        case PTT_DP: return 2;
+        case PTT_CA: return 3;
+        default:     return 0;
+    }
+}
+
+void *m17_txrx_ptt_thread(void *arg) {
+    bool was = false;
+    printf("m17web: hardware PTT monitor started\n");
+    fflush(stdout);
+    while (m_running == true) {
+        bool now = radio_keyed();
+        if (now != was) {
+            was = now;
+            if (now) {
+                printf("m17web: hardware PTT pressed\n");
+                fflush(stdout);
+                m_hw_keyed = true;
+                m17_txrx_ptt_on();
+            } else {
+                printf("m17web: hardware PTT released\n");
+                fflush(stdout);
+                if (m_hw_keyed) {
+                    m_hw_keyed = false;
+                    m17_txrx_ptt_off();
+                }
+            }
+        }
+        usleep(25000);              // 40 Hz is plenty for a switch
+    }
+    return arg;
+}
+
 void m17_txrx_ptt_on(void){
     m_ptt = PTT_TX;
     m17_db_set_ptt(false);

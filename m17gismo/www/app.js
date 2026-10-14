@@ -119,6 +119,7 @@ function applyState(s) {
   renderTxHealth(s);
   renderPosition(s);
   renderCompass(s);
+  renderHwPtt(s);
   $('simrow').style.display = (s.radio === 'sim') ? 'flex' : 'none';
 }
 
@@ -233,6 +234,19 @@ function renderPosition(s) {
 
 // The compass: a needle pointing at the bearing to the station being heard, and a
 // second small marker for the course that station reports.
+// Hardware PTT: the switch on the Pi's header, if the station has one
+function renderHwPtt(s) {
+    const g = s.gpio || {}, el = $('hwinfo');
+    if (!g.ok) {
+        el.textContent = g.built ? ('hardware PTT: ' + (g.error || 'unavailable')) : 'hardware PTT not built in';
+        el.style.color = 'var(--dim)';
+        return;
+    }
+    el.textContent = 'hardware PTT: GPIO ' + g.in + (g.pressed ? ' pressed' : ' ready') +
+        (g.hw_tx ? ' (keyed)' : '') + ' \u00b7 keys GPIO ' + g.out;
+    el.style.color = g.pressed ? 'var(--red)' : 'var(--green)';
+}
+
 function renderCompass(s) {
   const h = s.heard;
   const needle = $('cmp-needle'), course = $('cmp-course');
