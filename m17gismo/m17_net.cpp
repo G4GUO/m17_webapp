@@ -344,10 +344,14 @@ void m17_net_connect_to_reflector(const char *name, uint48_t fm, const char mod)
 
 	// Save info
 	char call[15];
-	// Add G to callsign
 	m17_decode_call(fm, call);
-    call[8] = 'G';
-    m_from = m17_encode_call(call);
+	// Only a *gateway* appends the letter G to its callsign.  A client carrying
+	// its own audio must present the plain callsign: with the suffix the reflector
+	// sees the audio arriving from a station that never connected (the audio
+	// packets carry the plain callsign in their LSF) and drops it - the link looks
+	// up, the meters move, and nothing is heard at the far end.
+	if(m17_db_get_chan_type() == DRTODN) call[8] = 'G';
+	m_from = m17_encode_call(call);
     m_mod  = mod;
 
 	if(net_find_reflector(name, m_ip_add, &m_port)>= 0){
