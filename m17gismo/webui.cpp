@@ -392,6 +392,17 @@ static void run_command(const char *cmd_in) {
         send_refs();
         return;
     }
+    // Show what was just asked for: m_dst otherwise only updates when a
+    // transmission goes out, so a destination set for a test stayed invisible.
+    if (strncasecmp(s, "da ", 3) == 0) {
+        const char *v = s + 3;
+        while (*v == ' ') v++;
+        if (*v == '#') v++;                       // '#' is not an M17 character
+        snprintf(m_dst, sizeof(m_dst), "%.9s", v);
+        for (char *q = m_dst; *q; q++) *q = (char)toupper((unsigned char)*q);
+    } else if (strcasecmp(s, "ba") == 0 || strcasecmp(s, "broadcast") == 0) {
+        snprintf(m_dst, sizeof(m_dst), "BROADCAST");
+    }
     if (strcasecmp(s, "b") == 0 || strcasecmp(s, "break") == 0) {
         m17_txrx_ptt_off();
         gui_cmd_resp("OK");

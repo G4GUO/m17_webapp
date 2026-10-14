@@ -23,6 +23,7 @@ static const char *const help_lines[] = {
 	"conn NAME MOD   connect to reflector NAME module MOD",
 	"disc            disconnect from the reflector",
 	"radio/loop/gate/client modes take effect at once, and are kept for the next start",
+	"da PARROT       ask a reflector to echo your own audio back (a self test)",
 	"mode loop       audio loopback, for practice",
 	"mode radio      M17 radio <-> local audio",
 	"mode gate       M17 radio <-> reflector gateway",

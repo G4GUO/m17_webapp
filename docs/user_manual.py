@@ -553,6 +553,12 @@ def build(path: str) -> None:
         ["The program will not start (port already in use)",
          "An older copy is still running: <b>bash tools/pi_m17web.sh stop</b>, wait a moment, then "
          "start it again."],
+        ["I transmit but nobody hears me",
+         "Test your own audio first, with no second operator needed: set the <b>destination</b> to "
+         "<b>PARROT</b> and transmit for a few seconds. The reflector echoes your voice straight back, "
+         "so if you hear yourself, your station is fine and the problem is at the far end (a listener "
+         "on the wrong module, or a browser that has not been allowed to play audio). Set the "
+         "destination back to <b>ALL</b>, or press <b>broadcast (ba)</b>, when you have finished."],
         ["The reflector will not connect",
          "Type the name exactly as the reflector publishes it (<b>M17-M17</b>, not the short form), "
          "press connect, and read the log: it says which address it is trying, or that the name is "

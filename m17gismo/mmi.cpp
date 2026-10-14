@@ -196,10 +196,13 @@ void mmi_parse(char *cmd){
 		m17_txrx_set_gate_add(text);
 		valid = true;
 	}
-	// Destination Address
+	// Destination Address.  A leading "#" is dropped: it is not one of the 40 M17
+	// characters (space, A-Z, 0-9, - / .), so "#PARROT" cannot be encoded - and
+	// "PARROT" is what the reflector actually looks for.
 	if(strncmp(token[0],"da",2)==0){
 		char text[10];
-		pad_address(token[1], text);
+		const char *want = (token[1][0] == '#') ? token[1] + 1 : token[1];
+		pad_address(want, text);
 		m17_txrx_set_dest_add(text);
 		valid = true;
 	}
