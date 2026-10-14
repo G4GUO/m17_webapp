@@ -29,7 +29,7 @@ header h1 { font-size: 1.15rem; margin: 0; letter-spacing: .06em; color: var(--a
 .link.on { background: rgba(62,207,142,.15); color: var(--green); }
 .link.off { background: rgba(255,92,92,.15); color: var(--red); }
 
-main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 330px); gap: .7rem; padding: .7rem; align-items: start; }
+main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 30rem); gap: .7rem; padding: .7rem; align-items: start; }
 /* The left column stacks two cards across; the console column stays one wide, short column */
 .col { display: grid; grid-template-columns: 1fr 1fr; gap: .7rem; align-content: start; }
 .col.wide { grid-template-columns: minmax(0, 1fr); }
@@ -54,7 +54,16 @@ button:hover { border-color: var(--accent); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 button.mini { font-size: .8rem; padding: .25rem .5rem; }
 
-.ptt { display: flex; flex-direction: column; gap: .6rem; }
+/* The receive and transmit controls stack, with short sliders: side by side in a
+   wide card, the gain sliders stretch across the whole card. */
+.radio-stack { display: flex; flex-direction: column; gap: .4rem; }
+.radio-stack input[type=range] { max-width: 11rem; }
+.radio-stack label { max-width: 20rem; }
+
+/* Push to talk: the last card of the grid, in the right hand column, so it sits
+   at the bottom right of the panel area and lines up with the cards above it. */
+.ptt { grid-column: 2; display: flex; flex-direction: column; gap: .5rem; }
+@media (max-width: 760px) { .ptt { grid-column: auto; } }
 .pttstate { display: flex; align-items: center; gap: .6rem; }
 .led {
   font-weight: 800; letter-spacing: .1em; padding: .25rem .8rem; border-radius: .35rem;
@@ -67,7 +76,7 @@ button.mini { font-size: .8rem; padding: .25rem .5rem; }
 .badge.sig { color: var(--amber); border-color: rgba(255,176,32,.45); }
 
 .ptt-button {
-  padding: 1rem; font-size: 1.1rem; font-weight: 700; letter-spacing: .04em;
+  padding: .8rem; font-size: 1.05rem; font-weight: 700; letter-spacing: .04em;
   background: linear-gradient(180deg, #2a3a4d, #1d2833); border: 1px solid var(--line);
 }
 .ptt-button .hint { display: block; font-size: .7rem; font-weight: 400; color: var(--dim); }
