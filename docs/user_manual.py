@@ -12,7 +12,7 @@ from __future__ import annotations
 import sys
 from datetime import date
 
-from reportlab.graphics.shapes import Drawing, Line, Rect, String
+from reportlab.graphics.shapes import Circle, Drawing, Line, Rect, String
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
@@ -34,7 +34,7 @@ from reportlab.platypus import (
 
 TITLE = "m17web User Manual"
 SUBTITLE = "M17 digital voice on a Raspberry Pi with an SDR, driven from your web browser"
-VERSION = "Version 1.0 \u2014 " + date.today().strftime("%d %B %Y")
+VERSION = "Version 1.1 \u2014 " + date.today().strftime("%d %B %Y")
 
 MARGIN = 2.7 * cm                 # ~87 characters per line: comfortable for body text
 FRAME_W = A4[0] - 2 * MARGIN      # usable width between the margins
@@ -127,46 +127,60 @@ class Manual:
     # -- the layout sketch --------------------------------------------------
     def sketch(self) -> None:
         """A labelled sketch of the panel layout - not a screenshot."""
-        W, H = FRAME_W, 250
+        W, H = FRAME_W, 214
         d = Drawing(W, H)
         dark, light, edge = colors.HexColor("#12395c"), colors.HexColor("#eef3f7"), colors.HexColor("#8fa3b5")
+        muted = colors.HexColor("#44586b")
+        red = colors.HexColor("#c62828")
         d.add(Rect(0, H - 24, W, 24, fillColor=dark, strokeColor=dark))
         d.add(String(8, H - 17, "m17web", fontName="Helvetica-Bold", fontSize=11, fillColor=colors.white))
-        for i, label in enumerate(["radio", "mode", "audio", "clients", "online"]):
-            d.add(String(90 + i * 68, H - 17, label, fontName="Helvetica", fontSize=8,
+        for i, label in enumerate(["radio", "mode", "audio", "clients", "locator", "position", "gnss", "online"]):
+            d.add(String(72 + i * 50, H - 17, label, fontName="Helvetica", fontSize=7,
                          fillColor=colors.HexColor("#cfe0ee")))
 
         def card(x, y, w, h, title, lines=()):
             d.add(Rect(x, y, w, h, fillColor=light, strokeColor=edge))
-            d.add(String(x + 6, y + h - 13, title, fontName="Helvetica-Bold", fontSize=9, fillColor=dark))
+            d.add(String(x + 6, y + h - 12, title, fontName="Helvetica-Bold", fontSize=8.5, fillColor=dark))
             for i, t in enumerate(lines):
-                d.add(String(x + 6, y + h - 25 - i * 11, t, fontName="Helvetica", fontSize=7.5,
-                             fillColor=colors.HexColor("#44586b")))
+                d.add(String(x + 6, y + h - 24 - i * 10, t, fontName="Helvetica", fontSize=7,
+                             fillColor=muted))
 
         pad, top = 6, H - 32
-        cw = (W - 3 * pad) / 2.0
-        card(pad, top - 118, cw, 112, "HOLD TO TALK", [
-            "RX / TX light    signal: in frame", "signal \u25af\u25af\u25af\u25af\u25af  power \u25af\u25af\u25af",
-            "break     carrier     duplex",
-        ])
-        card(pad, top - 208, cw, 84, "Station", [
-            "my callsign        destination", "gateway            listen to all",
-            "broadcast (ba)   help   clear log",
-        ])
-        card(pad + cw + pad, top - 118, cw, 112, "Radio", [
-            "RX frequency (Hz)   TX frequency (Hz)", "RX gain   TX gain   freq correction",
-            "apply frequencies   transmit carrier", "receive      noise",
-        ])
-        card(pad + cw + pad, top - 208, cw, 84, "Reflector / Audio / Console", [
-            "reflector   module   connect / disconnect",
-            "audio device   blank frames before voice",
-            "volume   mute   enable browser audio",
-            "Console: type a command here ... [send]",
-        ])
+        lw = (W - 3 * pad) * 0.64              # the card area on the left
+        cw = (lw - pad) / 2.0                  # two cards across it
+        rx = pad + lw + pad                    # the console column
+        rw = W - rx - pad
+        col = lambda c: pad + c * (cw + pad)
+
+        card(col(0), top - 52, cw, 46, "Station", [
+            "my callsign      destination", "gateway      listen to all", "broadcast (ba)  help  clear log"])
+        card(col(1), top - 52, cw, 46, "Radio", [
+            "RX frequency (Hz)", "RX gain   [======]", "TX frequency (Hz)   TX gain   [====]"])
+        card(col(0), top - 110, cw, 52, "Reflector", [
+            "reflector    module", "connect / disconnect"])
+        card(col(1), top - 110, cw, 52, "Position", [
+            "IO90ST          locator", "50.8036, -0.4419", "8 satellites   HDOP 1.2", "[ ] log to CSV  copy locator"])
+        card(col(0), top - 168, cw, 52, "Audio", [
+            "audio device    volume", "blank frames before voice", "mic / spk   transmit health"])
+        card(col(1), top - 168, cw, 52, "PUSH TO TALK", [
+            "RX / TX light     in frame", "signal \u25af\u25af\u25af\u25af\u25af  power \u25af\u25af\u25af",
+            "break     carrier     duplex", "hardware PTT: GPIO 11 ready"])
+        card(rx, top - 168, rw, 162, "Console / Command help", [
+            "log lines ...", "", ">> type a command    [send]", "",
+            "gps / csv / rf / tf / rg", "conn / disc / mode / audio"])
+
+        # the compass, inside the Position card
+        px, py = col(1) + cw - 22, top - 110 + 24
+        d.add(Circle(px, py, 12, fillColor=colors.white, strokeColor=edge))
+        d.add(String(px - 2.5, py + 13.5, "N", fontName="Helvetica", fontSize=5.5, fillColor=muted))
+        d.add(Line(px, py, px + 7, py + 8, strokeColor=red, strokeWidth=1.5))
+        d.add(String(px - 3.5, py - 8, "43", fontName="Helvetica", fontSize=5.5, fillColor=red))
         self.story.append(d)
         self.story.append(Paragraph(
-            "Figure 1: the panels on the page. The header is always visible; PTT, Station and Radio "
-            "on the left, Radio, Reflector, Audio and Console on the right. (Sketch, not a screenshot.)",
+            "Figure 1: the panels on the page. The header is always visible and carries your locator and "
+            "position. The cards on the left are laid out two across - Station and Radio, Reflector and "
+            "Position, then Audio with PUSH TO TALK at the bottom right - and the console and command help "
+            "are the column on the right. (Sketch, not a screenshot.)",
             S["caption"]))
 
 
@@ -196,8 +210,8 @@ def build(path: str) -> None:
         ["2", "What you need", "8", "The controls, panel by panel"],
         ["3", "Starting and stopping it", "9", "Commands"],
         ["4", "Opening the interface", "10", "If something goes wrong"],
-        ["5", "The screen at a glance", "11", "Good practice"],
-        ["6", "Making a contact", "12", "Quick reference"],
+        ["5", "The screen at a glance, your position and the locator", "11", "Good practice"],
+        ["6", "Making a contact, and the PTT switch", "12", "Quick reference"],
     ], [0.4, 2.9, 0.4, 4.3])
     m.pagebreak()
 
@@ -223,6 +237,10 @@ def build(path: str) -> None:
          "For audio at the Pi. Recommended - it is the most reliable audio path."],
         ["Antenna and a valid amateur licence", "You need a licence for any frequency you transmit on."],
         ["A web browser", "On any computer, tablet or phone on the same network as the Pi."],
+        ["<i>Optional:</i> a GPS receiver", "A small GPS receiver plugged into the Pi shows your position and "
+         "Maidenhead locator on screen, and sends it to other stations (section 5)."],
+        ["<i>Optional:</i> a PTT switch", "A switch wired to the Pi's header lets you transmit without the "
+         "browser, from a hand microphone or a foot switch (section 6)."],
     ], [2.6, 5.4])
 
     # --------------------------------------------------------- 3. start and stop
@@ -259,7 +277,8 @@ def build(path: str) -> None:
     m.sketch()
     m.table([
         ["Area", "What it is for"],
-        ["HOLD TO TALK", "Press and hold while you speak, then release. You can hold the space bar instead."],
+        ["PUSH TO TALK", "Bottom right. Press and hold while you speak, then release. You can hold the "
+                         "space bar instead. A physical switch on the Pi does the same job."],
         ["RX / TX light", "Shows whether you are transmitting. Next to it, <b>in frame</b> means a valid "
                           "M17 signal is being decoded, <b>no signal</b> means nothing is there."],
         ["signal and power bars", "How strong the received signal is, and your transmit power setting."],
@@ -268,7 +287,43 @@ def build(path: str) -> None:
         ["Reflector", "Linking over the internet to other M17 users (you may never need it)."],
         ["Audio", "Where your voice comes from and goes, the volume, and how healthy your transmit audio is."],
         ["Console", "A command box for advanced settings, and the log that shows what is happening."],
+        ["locator, position, gnss (top of the page)",
+         "Your Maidenhead locator and latitude/longitude from the GPS, and whether your position is being "
+         "sent with your transmissions."],
     ], [1.9, 6.1])
+
+    m.h2("Your position: the locator, and the compass")
+    m.p("If a GPS receiver is plugged into the Pi, your position is read from it and shown in two places: "
+        "in the header at the top (locator, latitude and longitude) and in the <b>Position</b> panel, in "
+        "large letters.")
+    m.table([
+        ["What you see", "What it means"],
+        ["IO90ST", "Your Maidenhead locator: six characters giving your position to about 5 km. "
+                   "Other operators use these to aim antennas, and they are the polite way to say where "
+                   "you are."],
+        ["50.8036, -0.4419", "Latitude and longitude in degrees. South and west are negative."],
+        ["satellites / HDOP / altitude", "How good the fix is. Six or more satellites and an HDOP below "
+                                         "about 2 means a good one. Altitude is in metres."],
+        ["copy locator", "Puts the locator on the clipboard, ready to paste into a log or a message."],
+        ["position ready / position sent", "Whether your position is being sent with your transmissions. "
+                                           "It is sent only while the fix is fresh, about every 5 seconds."],
+        ["the compass", "The bearing to the station you are hearing, with the distance in kilometres. "
+                        "The red needle points at them; the small yellow mark is the direction they say "
+                        "they are travelling. It needs a fix of your own to work."],
+        ["heard G4ABC ...", "The position another station sent, with its locator and how long ago it was "
+                            "received."],
+    ], [2.3, 5.7])
+    m.note("Your own position is sent to other stations as part of the M17 link setup, so only send it if "
+           "you are happy for it to be public. If you would rather not, unplug the GPS receiver: the rest "
+           "of the program does not care whether there is one.")
+
+    m.h2("Keeping a log of your position")
+    m.p("Tick <b>log to CSV</b> in the Position panel and a row is added to a file every few seconds, "
+        "which you can open in a spreadsheet: date, time, latitude, longitude, locator, altitude, speed, "
+        "course, satellites, HDOP, the age of the fix and a timestamp. The panel tells you where the file "
+        "is \u2014 <b>gps_track.csv</b> in the program's folder on the Pi \u2014 and how many rows it holds. "
+        "Untick it to stop. The <b>csv</b> command (section 9) does the same thing, and can change how "
+        "often a row is written.")
 
     # -------------------------------------------------------- 6. making a contact
     m.h1("6. Making a contact")
@@ -279,7 +334,7 @@ def build(path: str) -> None:
         "and press <b>apply frequencies</b>. This sets transmit to the same frequency.",
         "Listen first. When the other station speaks, the light shows <b>RX</b>, the signal bar moves, "
         "<b>in frame</b> appears and you hear them.",
-        "To reply, hold <b>HOLD TO TALK</b>, speak in your normal voice a little slower than a "
+        "To reply, hold <b>PUSH TO TALK</b>, speak in your normal voice a little slower than a "
         "telephone call, then release.",
         "Wait for the other station to finish before you press again \u2014 while you are transmitting, "
         "you cannot hear them.",
@@ -288,6 +343,26 @@ def build(path: str) -> None:
            "you press. If you are testing, a dummy load or the lowest gain keeps you out of trouble.")
 
     # ----------------------------------------------------------------- 7. audio
+    m.h2("Using a physical PTT switch")
+    m.p("As well as the button on the page you can transmit with a switch wired to the Raspberry Pi's "
+        "header \u2014 a hand microphone, a foot switch, or a small box you can hold. Pressing it "
+        "transmits exactly as the button does, and the RX / TX light follows it, so you can put the "
+        "browser down and operate normally.")
+    m.table([
+        ["Pin", "What it is for"],
+        ["GPIO 11 (header pin 23)",
+         "One side of the switch. The other side goes to ground \u2014 for example header pin 25 or 9."],
+        ["GPIO 10 (header pin 19)",
+         "An output that goes high while transmitting, to key an amplifier or another radio through a "
+         "suitable interface."],
+    ], [2.4, 5.6])
+    m.note("Ask whoever set the system up before wiring anything to the header: the pins have to match, "
+           "and the switch must go <b>to ground</b>, not to 3.3 V. Use a transistor or a relay for "
+           "anything that draws real current \u2014 these are logic outputs, not a power supply. Note also "
+           "that GPIO 10 and 11 are the SPI pins, so an SPI display would use them.")
+    m.p("Releasing the switch returns you to receive. Releasing it does not cancel a transmission you "
+        "started from the browser, so the two ways of transmitting do not fight each other.")
+
     m.h1("7. Audio \u2014 where your voice comes from and goes")
     m.p("Set this once in the <b>Audio</b> panel; it stays set.")
     m.table([
@@ -341,6 +416,7 @@ def build(path: str) -> None:
     ], [1.9, 6.1])
 
     m.h2("Radio")
+    m.p("The receive controls are stacked above the transmit ones.")
     m.table([
         ["Control", "What it does"],
         ["RX frequency (Hz)", "The frequency you listen on, in hertz (145500000 = 145.5 MHz)."],
@@ -360,6 +436,11 @@ def build(path: str) -> None:
         "and it frees the channel for others.")
     m.note("Reflector use may need the gateway address filled in as well, and a working internet "
            "connection on the Pi. If you only want local radio contacts, ignore this panel.")
+
+    m.h2("Position")
+    m.p("Your GPS position and Maidenhead locator in large letters, the compass showing where the "
+        "station you are hearing is, and the tick box that keeps a log of your position in a file. "
+        "Section 5 explains what each part means.")
 
     m.h2("Audio")
     m.table([
@@ -401,6 +482,11 @@ def build(path: str) -> None:
         ["audio alsa", "Voice through the Pi sound card. Alternatives: <b>browser</b>, <b>pulse</b>, "
                        "<b>both</b>, <b>none</b>."],
         ["lead 4", "Blank codec frames sent before the voice - see section 7."],
+        ["gps", "Show the GPS receiver, the fix and your locator. <b>gps /dev/ttyACM1 38400</b> uses a "
+                "different receiver."],
+        ["csv on / csv off", "Start or stop logging your position to a file - see section 5."],
+        ["csv 10", "Log a row every 10 seconds rather than every 5."],
+        ["csv status", "Show the log file and how many rows it holds."],
         ["load FILE", "Run a list of commands from a file."],
         ["w", "Clear the log pane."],
         ["b", "Break: stop transmitting now."],
@@ -441,6 +527,13 @@ def build(path: str) -> None:
         ["The program will not start (port already in use)",
          "An older copy is still running: <b>bash tools/pi_m17web.sh stop</b>, wait a moment, then "
          "start it again."],
+        ["The locator is blank, or there is no position",
+         "The GPS receiver has not got a fix yet, or is not plugged in. A fix can take a minute or two "
+         "outdoors, and from inside a building it may never arrive. Nothing else needs it, so carry on."],
+        ["The physical PTT switch does nothing",
+         "Check the wiring first (section 6). On the Pi, <b>gpioinfo</b> should list GPIO 10 and 11 as "
+         "used by m17web. If it shows something else, or the panel reports no hardware PTT, ask whoever "
+         "maintains the system."],
         ["The radio cannot be found at all",
          "The Pluto re-appears as a USB network interface when it is plugged in, and it needs the "
          "address 192.168.2.2. Check it is connected, then ask whoever maintains the system \u2014 this "
@@ -472,7 +565,7 @@ def build(path: str) -> None:
         ["1", "Station → my callsign: type your callsign."],
         ["2", "Radio → RX frequency (Hz): type the agreed frequency, press <b>apply frequencies</b>."],
         ["3", "Listen until you hear the other station (<b>in frame</b> appears)."],
-        ["4", "Hold <b>HOLD TO TALK</b>, speak, release."],
+        ["4", "Press and hold <b>PUSH TO TALK</b> (bottom right), speak, then release."],
         ["5", "Let the other station finish before pressing again."],
     ], [0.9, 7.1])
     m.h2("The three things that put most people right")
@@ -487,7 +580,9 @@ def build(path: str) -> None:
         ["The page will not reach the Pi",
          "On the Pi: <b>bash tools/pi_m17web.sh status</b>, then reload the page."],
     ], [2.3, 5.7])
-    m.note("Settings worth knowing: <b>audio device</b> (use the Pi's sound card, direct), "
+    m.note("Your locator and position are in the header at the top of the page; <b>log to CSV</b> in "
+           "the Position panel keeps a track of where you have been. A switch wired to the Pi transmits "
+           "just as the button does. Settings worth knowing: <b>audio device</b> (use the Pi's sound card, direct), "
            "<b>blank frames before voice</b> (default 4) and <b>volume</b> in the Audio panel; "
            "<b>help</b> in the Station panel lists every command.")
 
@@ -496,7 +591,7 @@ def build(path: str) -> None:
     m.p("m17web is a modification of <b>G4GUO/m17_sdr</b>, with the original terminal interface "
         "replaced by the web page described here. The M17 protocol it speaks is an open standard "
         "from the M17 Project; the voice coding is Codec2 by David Rowe and the M17 Project's "
-        "Codec2-mod build. It uses the open-source libiio, ALSA and Codec2 libraries.")
+        "Codec2-mod build. It uses the open-source libiio, ALSA, Codec2 and libgpiod libraries.")
     m.p("For the technical details \u2014 building it yourself, the audio back ends, the transmit "
         "timing and the rate planning \u2014 see <b>README.md</b> next to this manual, in the same folder.")
     m.note("The upstream project has no licence file, so this fork adds its own documentation only. "
