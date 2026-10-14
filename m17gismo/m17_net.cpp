@@ -3,6 +3,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <string.h>
+#include <strings.h>
 #include <pthread.h>
 
 #include "m17defines.h"
@@ -311,6 +312,13 @@ void *udp_thread( void *arg){
 	}
 	return arg;
 }
+// Reflector names are written both ways.  The published list uses full names
+// ("M17-M17"), older copies of M17Hosts.txt used the bare designator ("M17"),
+// and operators type either.  Everything is therefore matched on the designator
+// with any leading "M17-" removed, and displayed as "M17-<designator>".
+static const char *ref_designator(const char *name){
+	return (strncasecmp(name, "M17-", 4) == 0 && name[4] != 0) ? name + 4 : name;
+}
 int net_find_reflector(const char *name, char *ipadd, unsigned int *port){
 	FILE *fp;
 	char nname[40];
@@ -318,7 +326,7 @@ int net_find_reflector(const char *name, char *ipadd, unsigned int *port){
 	int res = -1;
 	if((fp=fopen(filename,"r"))!= NULL ){
 	    while(fscanf(fp,"%s %s %u",nname,ipadd,port)!=EOF){
-            if(strcmp(name, nname)==0){
+            if(strcasecmp(ref_designator(name), ref_designator(nname))==0){
             	// Found
             	fclose(fp);
             	return 0;
@@ -344,7 +352,8 @@ void m17_net_connect_to_reflector(const char *name, uint48_t fm, const char mod)
 
 	if(net_find_reflector(name, m_ip_add, &m_port)>= 0){
 		//
-		sprintf(m_name,"M17-%s",name);
+		// Name it as the operator does, without doubling a leading "M17-"
+		snprintf(m_name, sizeof(m_name), "M17-%s", ref_designator(name));
 	    // Construct the client sockaddr_in structure
 	    memset(&m_udp_other, 0, sizeof(m_udp_other));     // Clear struct
 	    m_udp_other.sin_family      = AF_INET;            // Internet/IP
@@ -357,6 +366,20 @@ void m17_net_connect_to_reflector(const char *name, uint48_t fm, const char mod)
 	    int n;
 	    n = net_fmt_conn(tx_buffer, m_from, mod);
 	    n = udp_send(tx_buffer, n );
+
+	    char text[160];
+	    snprintf(text, sizeof(text), "connecting to %s module %c at %s:%u",
+	             m_name, mod, m_ip_add, m_port);
+	    printf("m17web: %s\n", text);
+	    fflush(stdout);
+	    gui_cmd_resp(text);
+	}else{
+	    // Say so: silently doing nothing looked like the button being broken
+	    char text[160];
+	    snprintf(text, sizeof(text), "reflector '%s' is not in M17Hosts.txt", name);
+	    printf("m17web: %s\n", text);
+	    fflush(stdout);
+	    gui_cmd_resp(text);
 	}
 }
 void m17_net_disconnect_from_reflector(void){
@@ -377,6 +400,10 @@ void m17_net_ref_address(char *name){
 int m17_net_open(void)
 {
 	int r = 0;
+
+	// Called on demand now (see mmi.cpp "conn"), so make it safe to repeat:
+	// opening twice would try to bind the port a second time.
+	if (m_udp_running == true) return 0;
 
 	r += udp_rx_init();
 	r += udp_tx_init();

@@ -291,16 +291,17 @@ function renderTxHealth(s) {
   }
 }
 
+// The reflector list is a datalist, so the field can be typed into as well as
+// picked from. Anything may be entered: m17_net.cpp matches the designator in
+// M17Hosts.txt with or without the leading "M17-".
 function fillRefs(names) {
-  const sel = $('refname');
-  const cur = sel.value;
-  sel.innerHTML = '';
+  const dl = $('reflist');
+  dl.innerHTML = '';
   for (const n of names) {
     const o = document.createElement('option');
-    o.value = n; o.textContent = n;
-    sel.appendChild(o);
+    o.value = n;
+    dl.appendChild(o);
   }
-  if (cur) sel.value = cur;
 }
 
 // ---------------------------------------------------------------------------

@@ -431,11 +431,18 @@ def build(path: str) -> None:
 
     m.h2("Reflector")
     m.p("Reflectors link M17 stations over the internet, so you can talk to people out of radio "
-        "range. Choose a reflector from the list, choose the channel letter (the <b>module</b>), and "
-        "press <b>connect</b>. Press <b>disconnect</b> when you have finished \u2014 it is good manners, "
+        "range. Type the reflector's name \u2014 they are written like <b>M17-M17</b> \u2014 or pick one "
+        "from the list that appears as you type, choose the channel letter (the <b>module</b>), and "
+        "press <b>connect</b>. Press <b>disconnect</b> when you have finished: it is good manners, "
         "and it frees the channel for others.")
-    m.note("Reflector use may need the gateway address filled in as well, and a working internet "
-           "connection on the Pi. If you only want local radio contacts, ignore this panel.")
+    m.p("Watch the log while you do it. It either says which address it is connecting to, or it says "
+        "that the name is not in the list \u2014 in which case check the spelling against the reflector's "
+        "own web page. The badge next to the buttons shows whether you are linked.")
+    m.note("Reflector addresses do change over time. If a reflector that used to work stops working, "
+           "ask whoever maintains the system to refresh the list: the program reads it from a file on "
+           "the Pi, and the file has to be brought up to date (there is a tool for it). A stale "
+           "address looks exactly like a connect button that does nothing. If you only want local "
+           "radio contacts, ignore this panel.")
 
     m.h2("Position")
     m.p("Your GPS position and Maidenhead locator in large letters, the compass showing where the "
@@ -527,6 +534,11 @@ def build(path: str) -> None:
         ["The program will not start (port already in use)",
          "An older copy is still running: <b>bash tools/pi_m17web.sh stop</b>, wait a moment, then "
          "start it again."],
+        ["The reflector will not connect",
+         "Type the name exactly as the reflector publishes it (<b>M17-M17</b>, not the short form), "
+         "press connect, and read the log: it says which address it is trying, or that the name is "
+         "not in the list. If the list is out of date, ask whoever maintains the system to refresh "
+         "it. Some reflectors only answer on particular modules."],
         ["The locator is blank, or there is no position",
          "The GPS receiver has not got a fix yet, or is not plugged in. A fix can take a minute or two "
          "outdoors, and from inside a building it may never arrive. Nothing else needs it, so carry on."],

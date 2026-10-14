@@ -425,7 +425,12 @@ static void send_refs(void) {
             char name[32];
             if (sscanf(p, "%31s", name) != 1) continue;
             if (o > (int)sizeof(msg) - 64) break;
-            o += snprintf(&msg[o], sizeof(msg) - o, "%s\"%s\"", first ? "" : ",", name);
+            // Operators know reflectors by their full name ("M17-M17", as in the
+            // published list); older copies of M17Hosts.txt hold the bare
+            // designator.  Show them all as "M17-<designator>"; m17_net.cpp
+            // matches either form.
+            const char *bare = (strncasecmp(name, "M17-", 4) == 0) ? "" : "M17-";
+            o += snprintf(&msg[o], sizeof(msg) - o, "%s\"%s%s\"", first ? "" : ",", bare, name);
             first = 0;
         }
         fclose(fp);

@@ -65,7 +65,10 @@
     <div class="card">
       <h2>Reflector</h2>
       <div class="grid2">
-        <label>reflector<select id="refname"></select></label>
+        <label>reflector
+          <input id="refname" list="reflist" placeholder="M17-M17" autocomplete="off">
+          <datalist id="reflist"></datalist>
+        </label>
         <label>module<input id="refmod" maxlength="1" value="C"></label>
       </div>
       <div class="row">

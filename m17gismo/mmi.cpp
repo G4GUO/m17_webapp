@@ -260,6 +260,9 @@ void mmi_parse(char *cmd){
 	if(strncmp(token[0],"conn",4)==0){
 		if(nt == 3){
 			char c = token[2][0];
+			// The UDP sockets used to be opened only by the gate/client modes,
+			// so "connect" in the normal radio mode sent nothing at all.
+			m17_net_open();
             m17_net_connect_to_reflector( token[1], m17_db_get_src(), c);
 		    valid = true;
 		}
