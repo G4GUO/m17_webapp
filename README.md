@@ -122,6 +122,11 @@ not.  The PulseAudio back end or the file back end can be used instead.
 
 ## Web interface
 
+The layout is deliberately compact: the cards on the left are laid out two
+across (the push-to-talk and Position cards span the full width), and the console
+and command help are a narrow column with their own scroll bars, so a whole
+session fits on one screen without the page itself scrolling.
+
 * **PTT** - hold the button or the space bar; break / carrier / duplex buttons.
   Live RX/TX/DX indicator, signal and power meters, "in frame" badge.
 * **Station** - callsign, destination, gateway, broadcast, listen-to-all.
@@ -185,7 +190,20 @@ and plugged back in, the reader reopens it by itself.
   and at most once every 5 s - the rate at which the specification says a
   receiver may be expected to notice a change.
 * **Received positions are decoded too:** another station sending its position
-  produces a log line and appears under the Position panel as "heard ...".
+  produces a log line and appears under the Position panel as "heard ...", with
+  the **bearing and distance** from your fix to theirs.  A compass shows the
+  bearing to that station - the number worth having when pointing a beam - with a
+  smaller second marker for the course that station reports (yellow).  The
+  bearing needs a fix of your own, so it stays blank until you have one.
+* **The position can be logged to CSV.**  Tick *log to CSV* in the Position panel
+  (or `csv on`, `csv off`, `csv status`, `csv 10` for a different interval) and
+  one row is appended every few seconds to `gps_track.csv` in the working
+  directory - `/home/charles/m17web/gps_track.csv` for the service.  Set
+  `M17WEB_CSV` for another path.  Columns: date, time, lat, lon, locator,
+  altitude, speed, course, satellites, HDOP, age of fix, and an epoch column so
+  the rows are unambiguous and sort correctly (the GPS date and time are only as
+  fresh as the last sentence received).  The interface shows the file, the row
+  count and whether logging is on.
 
 ### The payload: metric, per specification 2.0.9
 

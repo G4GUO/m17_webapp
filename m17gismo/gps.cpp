@@ -33,6 +33,7 @@
 GpsMsg m_gps;
 
 int nmea_decimal(const char *in, int n);           // defined below, used by the parsers
+static void csv_tick(void);                        // defined below, called by the reader loop
 
 static char        m_device[160];          // "" = resolve automatically
 static int         m_baud = 38400;
@@ -300,7 +301,10 @@ void *gps_thread(void *arg) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue;
                 break;                                  // device went away
             }
-            if (n == 0) continue;                       // read timeout
+            if (n == 0) {                               // read timeout
+                csv_tick();
+                continue;
+            }
             for (ssize_t i = 0; i < n; i++) {
                 char c = buf[i];
                 if (c == '\n' || c == '\r') {
@@ -313,6 +317,7 @@ void *gps_thread(void *arg) {
                     line[used++] = c;
                 }
             }
+            csv_tick();
         }
         close(m_fd);
         m_fd = -1;
@@ -536,6 +541,108 @@ void gps_decode(uint8_t *b, GpsMsg *msg) {
     msg->lat          = (double)(int32_t)(lat << 8) / 256.0 / 8388607.0 * 90.0;
     msg->lon          = (double)(int32_t)(lon << 8) / 256.0 / 8388607.0 * 180.0;
     msg->valid        = (validity & GNSS_VALID_POSITION) ? true : false;
+}
+
+// ---------------------------------------------------------------------------
+// Where a station is relative to us: initial great circle bearing and distance.
+// The compass in the web interface shows the bearing to the station being heard,
+// which is the number that is useful for pointing an antenna.
+// ---------------------------------------------------------------------------
+static double deg2rad_(double d) { return d * M_PI / 180.0; }
+static double rad2deg_(double r) { return r * 180.0 / M_PI; }
+
+double gps_bearing(double lat1, double lon1, double lat2, double lon2) {
+    double p1 = deg2rad_(lat1), p2 = deg2rad_(lat2), dl = deg2rad_(lon2 - lon1);
+    double y = sin(dl) * cos(p2);
+    double x = cos(p1) * sin(p2) - sin(p1) * cos(p2) * cos(dl);
+    double b = rad2deg_(atan2(y, x));
+    if (b < 0.0) b += 360.0;
+    return b;
+}
+
+double gps_distance_km(double lat1, double lon1, double lat2, double lon2) {
+    const double R = 6371.0088;                     // mean Earth radius
+    double p1 = deg2rad_(lat1), p2 = deg2rad_(lat2);
+    double dp = p2 - p1, dl = deg2rad_(lon2 - lon1);
+    double a = sin(dp / 2) * sin(dp / 2) + cos(p1) * cos(p2) * sin(dl / 2) * sin(dl / 2);
+    if (a < 0.0) a = 0.0;
+    if (a > 1.0) a = 1.0;
+    return 2.0 * R * asin(sqrt(a));
+}
+
+// ---------------------------------------------------------------------------
+// Position log: one CSV row every few seconds while it is switched on.
+// ---------------------------------------------------------------------------
+static bool     m_csv_on;
+static int      m_csv_interval = 5;                 // seconds between rows
+static char     m_csv_path[256];
+static uint32_t m_csv_rows;
+static uint32_t m_csv_last_ms;
+static FILE    *m_csv_fp;
+
+void gps_csv_set(bool on, int secs) {
+    if (secs > 0) m_csv_interval = secs;
+    if (m_csv_interval < 1) m_csv_interval = 1;
+    if (on == m_csv_on) return;
+    m_csv_on = on;
+    if (!on) {
+        if (m_csv_fp) { fclose(m_csv_fp); m_csv_fp = NULL; }
+        return;
+    }
+    // Start the next row from now rather than immediately repeating one
+    m_csv_last_ms = 0;
+    printf("m17web: position log %s every %d s\n", m_csv_path, m_csv_interval);
+}
+
+bool gps_csv_on(void) { return m_csv_on; }
+int  gps_csv_rows(void) { return (int)m_csv_rows; }
+int  gps_csv_interval(void) { return m_csv_interval; }
+const char *gps_csv_path(void) { return m_csv_path; }
+
+static void csv_open(void) {
+    if (!m_csv_path[0]) {
+        const char *env = getenv("M17WEB_CSV");
+        snprintf(m_csv_path, sizeof(m_csv_path), "%s",
+                 (env && env[0]) ? env : "gps_track.csv");
+    }
+    bool fresh = access(m_csv_path, F_OK) != 0;
+    m_csv_fp = fopen(m_csv_path, "a");
+    if (!m_csv_fp) {
+        printf("m17web: cannot open the position log %s\n", m_csv_path);
+        return;
+    }
+    if (fresh) {
+        fprintf(m_csv_fp, "date,time,lat,lon,locator,alt_m,speed_kmh,course_deg,satellites,hdop,fix_age_s,epoch\n");
+        fflush(m_csv_fp);
+    }
+}
+
+// Called from the reader loop, which wakes at least once a second.
+static void csv_tick(void) {
+    if (!m_csv_on || !m_gps.valid) return;
+    uint32_t now = now_ms();
+    if (m_csv_last_ms && (now - m_csv_last_ms) < (uint32_t)(m_csv_interval * 1000)) return;
+    m_csv_last_ms = now;
+    if (!m_csv_fp) {
+        csv_open();
+        if (!m_csv_fp) return;
+    }
+    char grid[12];
+    gps_maidenhead(grid, sizeof(grid));
+    // The GPS date and time are only as fresh as the last sentence received, so
+    // an epoch column is written too: it is unambiguous and sorts correctly.
+    fprintf(m_csv_fp, "%04d-%02d-%02d,%02d:%02d:%02d,%.6f,%.6f,%s,%d,%.1f,%d,%d,%.2f,%.1f,%ld\n",
+            m_gps.year, m_gps.month, m_gps.day, m_gps.hour, m_gps.min, m_gps.sec,
+            m_gps.lat, m_gps.lon, grid, (int)m_gps.alt, m_gps.speed_kmh,
+            (int)m_gps.course, (int)m_gps.nsats, m_gps.hdop,
+            (now - m_gps.fix_ms) / 1000.0, (long)time(NULL));
+    fflush(m_csv_fp);
+    if (ferror(m_csv_fp)) {                 // the mount went away: retry later
+        fclose(m_csv_fp);
+        m_csv_fp = NULL;
+        return;
+    }
+    m_csv_rows++;
 }
 
 // One line describing a received position, for the log and the web interface.

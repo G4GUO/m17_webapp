@@ -14,11 +14,11 @@
 * { box-sizing: border-box; }
 body {
   margin: 0; background: var(--bg); color: var(--fg);
-  font: 1rem/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: .95rem/1.38 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 header {
-  display: flex; align-items: center; gap: 1.2rem;
-  padding: .6rem 1rem; background: var(--panel); border-bottom: 1px solid var(--line);
+  display: flex; align-items: center; gap: .9rem;
+  padding: .35rem .7rem; background: var(--panel); border-bottom: 1px solid var(--line);
   position: sticky; top: 0; z-index: 5; flex-wrap: wrap;
 }
 header h1 { font-size: 1.15rem; margin: 0; letter-spacing: .06em; color: var(--accent); }
@@ -29,12 +29,16 @@ header h1 { font-size: 1.15rem; margin: 0; letter-spacing: .06em; color: var(--a
 .link.on { background: rgba(62,207,142,.15); color: var(--green); }
 .link.off { background: rgba(255,92,92,.15); color: var(--red); }
 
-main { display: grid; grid-template-columns: minmax(320px, 460px) 1fr; gap: 1rem; padding: 1rem; align-items: start; }
-@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
-.col { display: flex; flex-direction: column; gap: 1rem; }
+main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 330px); gap: .7rem; padding: .7rem; align-items: start; }
+/* The left column stacks two cards across; the console column stays one wide, short column */
+.col { display: grid; grid-template-columns: 1fr 1fr; gap: .7rem; align-content: start; }
+.col.wide { grid-template-columns: minmax(0, 1fr); }
+.col > .span2 { grid-column: 1 / -1; }
+@media (max-width: 1000px) { main { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) { .col { grid-template-columns: minmax(0, 1fr); } }
 
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: .6rem; padding: .8rem .9rem; }
-.card h2 { margin: 0 0 .6rem; font-size: .82rem; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: .6rem; padding: .55rem .65rem; }
+.card h2 { margin: 0 0 .45rem; font-size: .78rem; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
 .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-top: .5rem; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem .8rem; }
 label { display: flex; flex-direction: column; gap: .2rem; font-size: .8rem; color: var(--dim); }
@@ -94,14 +98,29 @@ header { flex-wrap: wrap; }
 }
 .maidenhead {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 2.1em;
+  font-size: 1.7em;
   letter-spacing: 0.06em;
   font-weight: 600;
   color: var(--green);
 }
 
-.log { height: 34vh; min-height: 220px; overflow-y: auto; background: #0b0e12; border: 1px solid var(--line);
-  border-radius: .4rem; padding: .5rem; font: .85rem/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+/* Position: locator and fix on the left, a compass showing the bearing to the
+   station being heard on the right */
+.posrow { display: flex; gap: .9rem; align-items: flex-start; flex-wrap: wrap; }
+.posleft { flex: 1 1 15rem; min-width: 0; }
+.compass { width: 92px; text-align: center; flex: 0 0 auto; }
+.compass svg { width: 92px; height: 92px; display: block; }
+.cmp-ring { fill: none; stroke: var(--line); stroke-width: 2; }
+.cmp-tick { fill: none; stroke: var(--line); stroke-width: .6; stroke-dasharray: 2 6; }
+.cmp-lbl { fill: var(--dim); font-size: 13px; font-weight: 600; }
+.cmp-needle { stroke: var(--red); stroke-width: 3.5; stroke-linecap: round; }
+.cmp-course { stroke: var(--amber); stroke-width: 2.5; stroke-linecap: round; }
+.cmp-hub { fill: var(--fg); }
+.cmp-deg { display: block; font-weight: 700; font-size: .95rem; margin-top: -.35rem; }
+.compass .lbl { display: block; font-size: .68rem; color: var(--dim); line-height: 1.25; }
+
+.log { height: 26vh; min-height: 150px; overflow-y: auto; background: #0b0e12; border: 1px solid var(--line);
+  border-radius: .4rem; padding: .45rem; font: .78rem/1.35 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
 .log div { white-space: pre-wrap; word-break: break-word; }
 .log .k-tx { color: var(--red); }
 .log .k-rx { color: var(--green); }
@@ -110,9 +129,9 @@ header { flex-wrap: wrap; }
 .log .k-old { color: var(--dim); }
 .log .k-info { color: #b9c4cf; }
 #cmdform { display: flex; gap: .5rem; align-items: center; margin-top: .6rem; }
-#cmdform input { flex: 1; font-family: ui-monospace, Menlo, Consolas, monospace; }
+#cmdform input { flex: 1; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .82rem; }
 .prompt { color: var(--accent); font-family: ui-monospace, Menlo, Consolas, monospace; }
-.help { max-height: 22vh; overflow-y: auto; margin: 0; color: var(--dim); font-size: .82rem; }
+.help { height: 15vh; min-height: 96px; overflow-y: auto; margin: 0; color: var(--dim); font-size: .74rem; line-height: 1.3; }
 .note { color: var(--dim); font-size: .78rem; margin: .5rem 0 0; }
 .note b { color: var(--fg); }
 .note code { background: var(--panel2); padding: 0 .25rem; border-radius: .2rem; }

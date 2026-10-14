@@ -172,6 +172,25 @@ void mmi_parse(char *cmd){
 		valid = true;
 	}
 
+	// Position log: csv on|off|status, or the interval in seconds
+	if(strncmp(token[0],"csv",3)==0){
+		if(nt == 1 || strncmp(token[1],"st",2)==0){
+			printf("CSV position log is %s, every %d s, %d rows\n",
+			       gps_csv_on() ? "on" : "off", gps_csv_interval(), gps_csv_rows());
+			printf("  file %s\n\r", gps_csv_path());
+		} else if(strncmp(token[1],"on",2)==0 || strncmp(token[1],"off",3)==0){
+			bool on = (strncmp(token[1],"on",2)==0);
+			gps_csv_set(on, nt > 2 ? atoi(token[2]) : 0);
+			printf("CSV position log %s%s\n\r", on ? "on, every " : "off",
+			       on ? "" : "");
+			if(on) printf("CSV position log file %s\n\r", gps_csv_path());
+		} else {
+			gps_csv_set(gps_csv_on(), atoi(token[1]));      // just a new interval
+			printf("CSV position log every %d s\n\r", gps_csv_interval());
+		}
+		valid = true;
+	}
+
 	// GPS receiver: status, or pick a different device / speed
 	if(strncmp(token[0],"gps",3)==0){
 		if(nt == 1){
@@ -182,7 +201,9 @@ void mmi_parse(char *cmd){
 			printf("  status   %s\n", gps_status());
 			printf("  position %s  locator %s\n", st, grid);
 			printf("  altitude %d m\n", (int)m_gps.alt);
-			printf("  sent in META %s\n\r", m17_tx_gnss() ? "yes" : "no");
+			printf("  sent in META %s\n", m17_tx_gnss() ? "yes" : "no");
+			printf("  CSV log %s (%d rows in %s)\n\r",
+			       gps_csv_on() ? "on" : "off", gps_csv_rows(), gps_csv_path());
 		} else {
 			gps_close();
 			gps_set_device(token[1], nt > 2 ? atoi(token[2]) : 0);

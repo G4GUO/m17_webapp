@@ -118,6 +118,7 @@ function applyState(s) {
   renderAudioStatus(s);
   renderTxHealth(s);
   renderPosition(s);
+  renderCompass(s);
   $('simrow').style.display = (s.radio === 'sim') ? 'flex' : 'none';
 }
 
@@ -215,9 +216,48 @@ function renderPosition(s) {
     hel.style.display = 'none';
   }
 
+  // The position log (CSV) tick box and its state
+  const csv = g.csv || {};
+  const cb = $('csvtick');
+  if (document.activeElement !== cb) cb.checked = !!csv.on;
+  $('csvstate').textContent = csv.path
+    ? (csv.on
+        ? 'logging every ' + csv.interval + 's to ' + csv.path + ' (' + csv.rows + ' rows)'
+        : 'CSV log off' + (csv.rows ? ' (' + csv.rows + ' rows so far in ' + csv.path + ')' : ''))
+    : '';
+
   const flag = $('gnssflag');
   flag.textContent = g.tx ? 'position sent' : (g.valid ? 'position ready' : 'not sent');
   flag.className = 'badge' + (g.tx ? ' ok' : (g.valid ? ' sig' : ''));
+}
+
+// The compass: a needle pointing at the bearing to the station being heard, and a
+// second small marker for the course that station reports.
+function renderCompass(s) {
+  const h = s.heard;
+  const needle = $('cmp-needle'), course = $('cmp-course');
+  const deg = $('cmp-deg'), dist = $('cmp-dist');
+  if (!h || h.bearing === undefined) {
+    needle.setAttribute('transform', 'rotate(0)');
+    needle.style.opacity = 0.3;
+    course.setAttribute('opacity', 0);
+    deg.textContent = '--';
+    dist.textContent = h
+      ? ((h.src || '').trim() + ': no fix of our own to bear on')
+      : 'no station heard';
+    return;
+  }
+  needle.style.opacity = 1;
+  needle.setAttribute('transform', 'rotate(' + Number(h.bearing).toFixed(0) + ')');
+  deg.textContent = Number(h.bearing).toFixed(0) + '\u00b0';
+  if (h.course !== undefined) {
+    course.setAttribute('opacity', 0.85);
+    course.setAttribute('transform', 'rotate(' + Number(h.course).toFixed(0) + ')');
+  } else {
+    course.setAttribute('opacity', 0);
+  }
+  dist.textContent = (h.src || '').trim() + ' ' + Number(h.distance_km).toFixed(1) + ' km ' +
+    (h.grid || '') + (h.speed_kmh ? ' ' + Number(h.speed_kmh).toFixed(0) + ' km/h' : '');
 }
 
 function renderTxHealth(s) {
@@ -324,6 +364,8 @@ function wire() {
   });
 
   $('audioselect').onchange = (e) => cmd('audio ' + e.target.value);
+  $('csvtick').onchange = (e) => cmd('csv ' + (e.target.checked ? 'on' : 'off'));
+
   $('copygrid').onclick = () => {
     const t = $('grid').textContent.trim();
     if (navigator.clipboard && t.indexOf('-') === -1) navigator.clipboard.writeText(t);

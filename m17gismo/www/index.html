@@ -22,7 +22,7 @@
 
 <main>
   <section class="col">
-    <div class="card ptt">
+    <div class="card ptt span2">
       <div class="pttstate"><span id="pttled" class="led">RX</span>
         <span id="frameind" class="badge">no signal</span></div>
       <button id="pttbtn" class="ptt-button" disabled>HOLD TO&nbsp;TALK<span class="hint">(or hold space)</span></button>
@@ -90,24 +90,36 @@
       </div>
     </div>
 
-    <div class="card">
+    <div class="card span2">
       <h2>Position <span class="badge" id="gnssflag">not sent</span></h2>
-      <div class="gridrow">
-        <span id="grid" class="maidenhead">------</span>
-        <span class="lbl" id="latlon">no fix</span>
+      <div class="posrow">
+        <div class="posleft">
+          <span id="grid" class="maidenhead">------</span>
+          <span class="lbl" id="latlon">no fix</span>
+          <div class="row">
+            <button id="copygrid" class="mini">copy locator</button>
+            <label class="chk"><input type="checkbox" id="csvtick"> log to CSV</label>
+          </div>
+          <p class="note" id="gpsdetail">waiting for the GPS&hellip;</p>
+          <p class="note" id="csvstate"></p>
+          <p class="note" id="heard" style="display:none"></p>
+        </div>
+        <div class="compass">
+          <svg viewBox="-50 -50 100 100" role="img" aria-label="bearing to the station being heard">
+            <circle class="cmp-ring" r="46"></circle>
+            <circle class="cmp-tick" r="39"></circle>
+            <text class="cmp-lbl" y="-31" text-anchor="middle">N</text>
+            <text class="cmp-lbl" x="33" y="4">E</text>
+            <text class="cmp-lbl" y="38" text-anchor="middle">S</text>
+            <text class="cmp-lbl" x="-36" y="4">W</text>
+            <line id="cmp-needle" class="cmp-needle" x1="0" y1="0" x2="0" y2="-38"></line>
+            <line id="cmp-course" class="cmp-course" x1="0" y1="-29" x2="0" y2="-42" opacity="0"></line>
+            <circle class="cmp-hub" r="3"></circle>
+          </svg>
+          <span class="cmp-deg" id="cmp-deg">--</span>
+          <span class="lbl" id="cmp-dist">no station heard</span>
+        </div>
       </div>
-      <div class="row">
-        <button id="copygrid" class="mini">copy locator</button>
-        <span class="lbl">Maidenhead locator</span>
-      </div>
-      <p class="note" id="gpsdetail">waiting for the GPS&hellip;</p>
-      <p class="note" id="heard" style="display:none"></p>
-      <p class="note">
-        The GPS receiver is read over its serial port. When the fix is fresh the
-        position is put in the M17 link setup frame as the GNSS position data
-        (META field), refreshed at superframe boundaries and no more often than
-        every 5&nbsp;s, as the specification requires.
-      </p>
     </div>
 
     <div class="card">
@@ -141,16 +153,9 @@
         <label class="chk"><input type="checkbox" id="mute"> mute</label>
       </div>
       <p class="note">
-        <b>Raspberry Pi sound card (direct)</b> talks to the card through ALSA and is
-        the reliable choice on a Pi: it opens the USB/PnP audio card if one is
-        plugged in, otherwise the ALSA default device.  <b>PulseAudio</b> is the same
-        card via the PulseAudio daemon (see <code>pactl info</code>); Debian routes
-        ALSA's <code>default</code> device through PulseAudio, so use the direct
-        option if that daemon misbehaves.  Either way the microphone and speaker
-        plugged into the Pi are used and nothing is needed from this browser.
-        <b>Browser</b> audio needs a secure context: Chrome/Safari only hand over the
-        microphone on <code>https://</code> or <code>localhost</code>, so over a plain
-        <code>http://&lt;pi-address&gt;</code> the Pi sound card is the way to go.
+        <b>Direct</b> talks to the card through ALSA (reliable on a Pi, no daemon);
+        <b>PulseAudio</b> goes through the daemon; <b>browser</b> needs a secure
+        context (<code>https://</code> or <code>localhost</code>) for its microphone.
       </p>
     </div>
   </section>

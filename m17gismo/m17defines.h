@@ -549,6 +549,15 @@ const char *gps_status(void);                     // last open/reopen result
 bool gps_fix_fresh(int max_age_ms);               // valid fix within max_age_ms
 uint32_t gps_fix_age_ms(void);                    // age of the last fix, ms
 bool gps_rx_position(GpsMsg *out, char *src, int n);  // last position heard from another station
+double gps_bearing(double lat1, double lon1, double lat2, double lon2);   // degrees true
+double gps_distance_km(double lat1, double lon1, double lat2, double lon2);
+
+// Position log (CSV)
+void gps_csv_set(bool on, int seconds);           // seconds 0 = keep the current interval
+bool gps_csv_on(void);
+int  gps_csv_rows(void);
+int  gps_csv_interval(void);
+const char *gps_csv_path(void);
 uint32_t gps_rx_age_ms(void);
 double gps_lat(void);
 double gps_lon(void);

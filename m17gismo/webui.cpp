@@ -230,17 +230,28 @@ static void build_state(char *out, int len) {
                 char rgrid[12];
                 gps_maidenhead_of(rx.lat, rx.lon, rgrid, sizeof(rgrid));
                 o = json_add(out, len, o, ",\"heard\":{\"src\":\"%s\",\"lat\":%.6f,\"lon\":%.6f,"
-                             "\"grid\":\"%s\",\"alt_m\":%d,\"speed_kmh\":%.1f,\"age_s\":%.1f}",
-                             rsrc, rx.lat, rx.lon, rgrid, (int)rx.alt, rx.speed_kmh, gps_rx_age_ms() / 1000.0);
+                             "\"grid\":\"%s\",\"alt_m\":%d,\"speed_kmh\":%.1f,\"course\":%d,\"age_s\":%.1f",
+                             rsrc, rx.lat, rx.lon, rgrid, (int)rx.alt, rx.speed_kmh, (int)rx.course,
+                             gps_rx_age_ms() / 1000.0);
+                // Bearing and distance only mean something with a fix of our own
+                if (gps_fix_fresh(60000)) {
+                    o = json_add(out, len, o, ",\"bearing\":%.1f,\"distance_km\":%.2f",
+                                 gps_bearing(gps_lat(), gps_lon(), rx.lat, rx.lon),
+                                 gps_distance_km(gps_lat(), gps_lon(), rx.lat, rx.lon));
+                }
+                o = json_add(out, len, o, "}");
             }
         }
         o = json_add(out, len, o, ",\"gps\":{\"valid\":%s,\"fresh\":%s,\"tx\":%s,\"lat\":%.6f,\"lon\":%.6f,"
                      "\"grid\":\"%s\",\"alt_m\":%d,\"speed_kmh\":%.1f,\"course\":%d,\"hdop\":%.2f,"
-                     "\"sats\":%d,\"age_s\":%.1f,\"status\":\"%s\"}",
+                     "\"sats\":%d,\"age_s\":%.1f,\"status\":\"%s\","
+                     "\"csv\":{\"on\":%s,\"path\":\"%s\",\"rows\":%d,\"interval\":%d}}",
                      m_gps.valid ? "true" : "false", fresh ? "true" : "false",
                      m17_tx_gnss() ? "true" : "false",
                      m_gps.lat, m_gps.lon, grid, (int)m_gps.alt, m_gps.speed_kmh, (int)m_gps.course,
-                     m_gps.hdop, (int)m_gps.nsats, gps_fix_age_ms() / 1000.0, dev);
+                     m_gps.hdop, (int)m_gps.nsats, gps_fix_age_ms() / 1000.0, dev,
+                     gps_csv_on() ? "true" : "false", gps_csv_path(),
+                     gps_csv_rows(), gps_csv_interval());
     }
     o = json_add(out, len, o, ",\"clients\":%d", m_srv ? ws_client_count(m_srv) : 0);
     o = json_add(out, len, o, ",\"rx_stream\":%lu", (unsigned long)(db->n_frames - m_frames_seen));

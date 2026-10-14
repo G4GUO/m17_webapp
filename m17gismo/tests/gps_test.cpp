@@ -73,6 +73,26 @@ int main(void) {
     }
     printf("  %d subsquares checked\n", cases);
 
+    printf("\n== bearing and distance (hand-checked values) ==\n");
+    struct { double la1, lo1, la2, lo2, bearing, tol, dist_lo, dist_hi; const char *what; } bd[] = {
+        { 50, 0, 51, 0,   0.0, 0.01, 111.0, 111.4, "due north" },
+        { 50, 0, 49, 0, 180.0, 0.01, 111.0, 111.4, "due south" },
+        { 50, 0, 50, 1,  89.6, 1.00,   71.0,  72.0, "east along 50N" },
+        { 50, 0, 50, -1, 270.4, 1.00,  71.0,  72.0, "west along 50N" },
+        { 0, 0, 0, 1,    90.0, 0.20, 111.0, 111.4, "east on the equator" },
+        { 50.803592, -0.441952, 51.5074, -0.1278, 15.6, 1.5, 80.0, 83.0, "Ferring to London" },
+    };
+    for (unsigned i = 0; i < sizeof(bd) / sizeof(bd[0]); i++) {
+        double b = gps_bearing(bd[i].la1, bd[i].lo1, bd[i].la2, bd[i].lo2);
+        double d = gps_distance_km(bd[i].la1, bd[i].lo1, bd[i].la2, bd[i].lo2);
+        double diff = fabs(b - bd[i].bearing);
+        if (diff > 180.0) diff = 360.0 - diff;
+        bool ok = (diff <= bd[i].tol) && (d >= bd[i].dist_lo) && (d <= bd[i].dist_hi);
+        if (!ok) fails++;
+        printf("  %-20s bearing %6.1f (want %5.1f)  %6.1f km (want %.0f-%.0f)  %s\n",
+               bd[i].what, b, bd[i].bearing, d, bd[i].dist_lo, bd[i].dist_hi, ok ? "ok" : "FAIL");
+    }
+
     printf("\n== M17 META GNSS payload ==\n");
     GpsMsg in, out;
     memset(&in, 0, sizeof(in));

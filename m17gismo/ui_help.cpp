@@ -30,6 +30,8 @@ static const char *const help_lines[] = {
 	"lead N          blank codec frames sent before the voice (default 4)",
 	"gps             show the GPS receiver, the fix and the Maidenhead locator",
 	"gps DEV [BAUD]  use a different GPS device (e.g. gps /dev/ttyACM1 38400)",
+	"csv on|off|N    log the position to CSV (every N seconds, default 5)",
+	"csv status      show the log file and how many rows it holds",
 	"audio alsa      voice via the Pi sound card, direct ALSA",
 	"audio alsa DEV  ...on a specific device, e.g. audio alsa plughw:3,0",
 	"audio pulse     voice via the Pi sound card through PulseAudio",
