@@ -1,5 +1,6 @@
 #include <math.h>
 #include <memory.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include "m17defines.h"
@@ -33,9 +34,64 @@ void valid_packet_received(uint8_t *packet, int len){
 
 }
 
+// The position a station last sent us: M17 puts a GNSS position in the LSF
+// META field when the TYPE encryption subtype bits are 0b01 (and encryption is
+// off). Kept here so the web interface can show who is where.
+static GpsMsg   m_rx_gps;
+static uint32_t m_rx_gps_ms;
+static uint32_t m_rx_gps_logged;
+static char     m_rx_gps_src[16] = "";
+
+static uint32_t rx_now_ms(void){
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint32_t)(t.tv_sec * 1000 + t.tv_nsec / 1000000);
+}
+
+// out may be NULL, src may be NULL.  Returns false if nothing was heard in the
+// last minute.
+bool gps_rx_position(GpsMsg *out, char *src, int n){
+    if (!m_rx_gps_ms || (rx_now_ms() - m_rx_gps_ms) > 60000) return false;
+    if (out) *out = m_rx_gps;
+    if (src && n > 0) snprintf(src, n, "%s", m_rx_gps_src);
+    return true;
+}
+
+uint32_t gps_rx_age_ms(void){
+    if (!m_rx_gps_ms) return 0;
+    return rx_now_ms() - m_rx_gps_ms;
+}
+
 static void valid_lsf_received(uint48_t src_add, uint48_t dst_add, uint8_t *meta, M17Type type){
 	m17_db_set_rx_src( src_add );
 	m17_db_set_rx_dst( dst_add );
+	// A station announcing where it is. The LSF repeats every superframe (240 ms),
+	// so the log line is throttled.
+	if (type.et == 0 && type.est == META_GNSS) {
+	    GpsMsg g;
+	    memset(&g, 0, sizeof(g));
+	    gps_decode(meta, &g);
+	    if (g.valid) {
+	        char call[16];
+	        m17_decode_call(src_add, call);
+	        memset(m_rx_gps_src, 0, sizeof(m_rx_gps_src));
+	        snprintf(m_rx_gps_src, sizeof(m_rx_gps_src), "%s", call);
+	        // m17_decode_call pads the callsign with spaces
+	        for (int k = (int)strlen(m_rx_gps_src) - 1; k >= 0 && m_rx_gps_src[k] == ' '; k--)
+	            m_rx_gps_src[k] = 0;
+	        m_rx_gps = g;
+	        m_rx_gps_ms = rx_now_ms();
+	        if (m_rx_gps_ms - m_rx_gps_logged > 5000) {
+	            m_rx_gps_logged = m_rx_gps_ms;
+	            char grid[12], pos[96];
+	            gps_maidenhead_of(g.lat, g.lon, grid, sizeof(grid));
+	            snprintf(pos, sizeof(pos), "%.5f, %.5f", g.lat, g.lon);
+	            printf("GNSS: %s at %s %s, %d m, %d deg, %.1f km/h\n",
+	                   m_rx_gps_src, pos, grid, (int)g.alt, (int)g.course, g.speed_kmh);
+	            fflush(stdout);
+	        }
+	    }
+	}
     gui_update();
 }
 

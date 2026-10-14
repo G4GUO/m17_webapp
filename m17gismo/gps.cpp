@@ -1,265 +1,546 @@
-#include <math.h>
+// gps.cpp
+//
+// GPS receiver support: read NMEA from a serial GPS, keep the current fix, and
+// encode/decode the M17 LSF META GNSS position payload.
+//
+// The receiver is a u-blox 7 on USB, which appears as a CDC-ACM serial port
+// (/dev/ttyACM<n>), not a ttyUSB bridge.  Its port number depends on what else
+// enumerated first, so the device is resolved by identity:
+//
+//   1. the device set with "gps <device> [baud]" or M17WEB_GPS
+//   2. the first u-blox / GPS device in /dev/serial/by-id
+//   3. /dev/ttyACM0
+//
+// The port speed matters: this receiver only emits navigation sentences at
+// 38400 baud (at 9600 it sends nothing but the u-blox banner text), so the port
+// is configured with termios rather than left as the driver found it.
+//
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <pthread.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <termios.h>
+#include <time.h>
+#include <glob.h>
+#include <sys/stat.h>
+
 #include "m17defines.h"
 
 GpsMsg m_gps;
 
-void gps_decode(uint8_t *b, GpsMsg *msg){
+int nmea_decimal(const char *in, int n);           // defined below, used by the parsers
 
-	uint16_t n;
-    uint48_t w;
+static char        m_device[160];          // "" = resolve automatically
+static int         m_baud = 38400;
+static int         m_fd = -1;
+static bool        m_gps_running;
+static bool        m_thread_started;
+static pthread_t   m_tid;
+static char        m_status[128] = "not started";
 
-	msg->lat = (int8_t)b[0];// lat degrees
-    n = pack_8_to_16(&b[1]);// lat fraction
-    msg->lat += n/65536.0;
-
-    msg->lon  = (int16_t)pack_8_to_16(&b[3]); // long deg int
-    n    = pack_8_to_16(&b[5]);// long fraction
-    msg->lon += n/65536.0;
-
-    msg->alt = pack_8_to_16(&b[7]) - 1500;// Alt
-
-    w = pack_8_to_48(&b[9]);
-    msg->course =  w>>38;
-    msg->speed  = (w>>28)&0x3FF;
-    msg->object =  w&0xFFFFF;
+static uint32_t now_ms(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint32_t)(t.tv_sec * 1000 + t.tv_nsec / 1000000);
 }
 
-void gps_encode(uint8_t *b, GpsMsg *msg){
-	double frac,ip;
-	uint16_t n;
-    uint48_t w;
-
-    // Lattitude
-	frac = modf(msg->lat,&ip);
-    b[0] = ip;
-    n = frac*65536;
-    pack_16_to_8(n,&b[1]);
-
-    // Longitude
-	frac = modf(msg->lon,&ip);
-    pack_16_to_8(n,&b[3]);
-    n = frac*65536;
-    pack_16_to_8(n,&b[5]);
-
-    // Altitude
-    pack_16_to_8(msg->alt+1500,&b[7]);
-    // Course
-    w = msg->course;
-    w <<= 10;
-    w |= msg->speed;
-    w <<= 20;
+// ---------------------------------------------------------------------------
+// Configuration and device resolution
+// ---------------------------------------------------------------------------
+void gps_set_device(const char *dev, int baud) {
+    if (dev) snprintf(m_device, sizeof(m_device), "%s", dev);
+    if (baud > 0) m_baud = baud;
 }
-void gps_nmea_parse(char *nmea){
-	int nt = 0;
-	char *token[25];
-	token[nt] = strtok(nmea,",");
-	while(token[nt] != NULL){
-		if( ++nt == 25 ) break;
-		token[nt] = strtok(NULL,",");
-	}
 
-	//MSG
+const char *gps_device(void) { return m_device; }
+int gps_baud(void) { return m_baud; }
+const char *gps_status(void) { return m_status; }
 
-	// TIME
-	// Latidude
-	// N/S
-	// Longitude
-	// W/E
-	// WE
-	// Quality
-	// Number of satellites
-	// HDOP
-	// Altitude
-	// Units M eters or feet
-	// Geoidal seperation
-	// Units
-
+// Baud rate constants are not contiguous, so they need a table.
+static int baud_constant(int baud) {
+    switch (baud) {
+        case 4800:   return B4800;
+        case 9600:   return B9600;
+        case 19200:  return B19200;
+        case 38400:  return B38400;
+        case 57600:  return B57600;
+        case 115200: return B115200;
+        default:     return B38400;
+    }
 }
-static bool m_gps_running;
-static pthread_t m_tid;
 
-int nmea_decimal(const char *in, int n){
-	int v = 0;
-	for( int i = 0; i < n; i++){
-		v *= 10;
-		v += in[i] -'0';
-	}
-	return v;
+static void resolve_device(char *out, size_t n) {
+    if (m_device[0]) { snprintf(out, n, "%s", m_device); return; }
+    const char *env = getenv("M17WEB_GPS");
+    if (env && env[0]) { snprintf(out, n, "%s", env); return; }
+
+    // By identity, so the port number does not matter.  The PlutoSDR also
+    // presents a serial port, which is exactly what we must not open.
+    static const char *const patterns[] = {
+        "/dev/serial/by-id/*u-blox*",
+        "/dev/serial/by-id/*GPS*",
+        "/dev/serial/by-id/*GPS*GNSS*",
+        NULL
+    };
+    for (int i = 0; patterns[i]; i++) {
+        glob_t g;
+        if (glob(patterns[i], 0, NULL, &g) == 0 && g.gl_pathc > 0) {
+            snprintf(out, n, "%s", g.gl_pathv[0]);
+            globfree(&g);
+            return;
+        }
+        globfree(&g);
+    }
+    snprintf(out, n, "/dev/ttyACM0");
 }
-bool nmea_chksum( char *nmea){
-	char c = 0;
-	for( uint32_t i = 1; i < strlen(nmea); i++){
-		if(nmea[i] != '*'){
-			c ^= nmea[i];
-	    }else{
-	    	int s = strtol(&nmea[i+1],NULL,16);
-	    	if( c == s ){
-	    		return true;
-	    	}else{
-	    		return false;
-	    	}
-	    }
-	}
-	return false;
+
+static int open_port(const char *dev) {
+    int fd = open(dev, O_RDONLY | O_NOCTTY | O_NONBLOCK);
+    if (fd < 0) return -1;
+
+    struct termios tio;
+    if (tcgetattr(fd, &tio) != 0) { close(fd); return -1; }
+    cfmakeraw(&tio);
+    cfsetispeed(&tio, baud_constant(m_baud));
+    cfsetospeed(&tio, baud_constant(m_baud));
+    tio.c_cflag |= (CLOCAL | CREAD);
+    tio.c_cc[VMIN]  = 0;
+    tio.c_cc[VTIME] = 10;                      // 1 s read timeout
+    if (tcsetattr(fd, TCSANOW, &tio) != 0) { close(fd); return -1; }
+    tcflush(fd, TCIFLUSH);
+    return fd;
 }
-int gps_tokenise(char *nmea, char *list[]){
-    int len = strlen(nmea);
+
+// ---------------------------------------------------------------------------
+// NMEA parsing
+// ---------------------------------------------------------------------------
+static bool nmea_chksum(const char *nmea) {
+    char c = 0;
+    const char *p = strchr(nmea, '*');
+    if (!p) return false;
+    for (const char *q = nmea + 1; q < p; q++) c ^= *q;
+    return c == (char)strtol(p + 1, NULL, 16);
+}
+
+static int gps_tokenise(char *nmea, char *list[], int max) {
     int n = 0;
-    list[n++] = nmea;
-    for( int i = 1; i < len;  i++){
-    	if(nmea[i] == ','){
-    		nmea[i] = 0;
-    		list[n] = &nmea[i+1];
-		    n++;
-    	}
+    char *p = nmea;
+    if (n < max) list[n++] = p;
+    for (; *p && n < max; p++) {
+        if (*p == ',' || *p == '*') { *p = 0; if (n < max) list[n++] = p + 1; }
     }
     return n;
 }
-void gps_parse_nmea( char *nmea){
-    char *token;
-    char *list[25];
-    const char s[2] = ",";
-    if(nmea_chksum( nmea)==false) return;
-    int nt = gps_tokenise( nmea, list);
-    // Valid message
-    if(strncmp(list[0],"$GPTXT",5)==0){
-    	// Message about GPS device
-    //	token = strtok( NULL, s);
-    }
-    if(strncmp(list[0],"$GPRMC",5)==0){
-    	//$GPRMC,132334.00,A,5048.22218,N,00026.51640,W,0.039,,240722,,,A*6D
-    	return;
-    	token = strtok( NULL, s);// UTC
-    	token = strtok( NULL, s);// STATUS
-    	token = strtok( NULL, s);// LAT
-    	token = strtok( NULL, s);// LAT DIR
-    	token = strtok( NULL, s);// LON
-    	token = strtok( NULL, s);// LON DIR
-    	token = strtok( NULL, s);// Speed over ground Knots
-    	token = strtok( NULL, s);// Track made good
-    	token = strtok( NULL, s);// Date
-     	token = strtok( NULL, s);// Magnetic variation
-    	token = strtok( NULL, s);// Magnetic var direction
-    	token = strtok( NULL, s);// Mode Indicator
-    }
-    if(strncmp(list[0],"$GPVTG",5)==0){
-    	return;
-    	//$GPVTG,,T,,M,0.039,N,0.072,K,A*2C
-    	token = strtok( NULL, s);// Track made good degree true
-    	token = strtok( NULL, s);// True track indicator
-    	token = strtok( NULL, s);// Track made good, degrees magnetic
-    	token = strtok( NULL, s);// Magnetic track indicator
-    	token = strtok( NULL, s);// Speed over ground knots
-    	token = strtok( NULL, s);// Nautical speed indicator N - knots
-    	token = strtok( NULL, s);// Speed kph
-    	//token = strtok( NULL, s);// Speed indicator
-    	//token = strtok( NULL, s);// Mode indicator
 
-    }
-    if(strncmp(list[0],"$GPGGA",5)==0){
-    	//$GPGGA,132334.00,5048.22218,N,00026.51640,W,1,07,1.14,11.4,M,45.8,M,,*74
-    	// 1 UTC
-    	// 2 LAT
-    	// 3 LAT DIR
-    	// 4 LON
-    	// 5 LON DIR
-    	// 6 Quality
-    	// 7 Nr sats
-    	m_gps.nsats = atoi(list[7]);
-    	// 8 HDOP
-    	// 9 Ant altitude
-    	double alt = strtod(list[9],NULL);
-    	// 10 A units
-    	if(list[10][0] == 'M' ){
-    		m_gps.alt = alt*3.28084;// Convert to feet
-    	}
-        // 11 Undulation
-        // 12 Undulation units
-        // 13 Age of correction
-        // 14 Differential Base station ID
-    }
-    if(strncmp(list[0],"$GPGSA",5)==0){
-    	return;
-    	//$GPGSA,A,3,03,17,01,19,04,22,21,,,,,,2.09,1.14,1.75*05
-    	token = strtok( NULL, s);// Mode MA
-    	token = strtok( NULL, s);// Mode 123 (1D 2D 3D)
-    	for( int i = 0; i < 12; i++){
-    	    token = strtok( NULL, s);// PRN of satellites
-    	}
-    	token = strtok( NULL, s);// PDOP
-    	token = strtok( NULL, s);// HDOP
-    	token = strtok( NULL, s);// VDOP
-//    	token = strtok( NULL, s);// System ID
-    }
-    if(strncmp(list[0],"$GPGSV",5)==0){
-    	return;
-    	//$GPGSV,2,1,08,01,74,097,28,03,74,243,39,04,23,176,34,17,46,297,31*73
-    	token = strtok( NULL, s);// # msgs
-    	int m = atoi(token);
-    	token = strtok( NULL, s);// msg #
-    	token = strtok( NULL, s);// # sats
-    	int n = atoi(token);
-    	// Calculate the number of satellites in this messages
-    	for( int i = 0; i < n/m; i++){
- //   	    token = strtok( NULL, s);// Sat PRN
- //   	    token = strtok( NULL, s);// Elevation
- //   	    token = strtok( NULL, s);// Azimuth
- //   	    token = strtok( NULL, s);// SNR
-    	}
- //   	token = strtok( NULL, s);// System ID
-    }
-    if(strncmp(list[0],"$GPGLL",5)==0){
-    	//$GPGLL,5048.22247,N,00026.51350,W,191209.00,A,A*77
-    	m_gps.lat = nmea_decimal(list[1],2);
-    	m_gps.lat += strtod(&list[1][2],NULL)/60.0;
-    	if(list[2][0] == 'N'){
-
-    	}
-    	if(list[2][0] == 'S'){
-    		m_gps.lat = -m_gps.lat;
-    	}
-        m_gps.lon = nmea_decimal(list[3],3);
-        m_gps.lon += strtod(&list[3][3],NULL)/60.0;
-    	if(list[4][0] == 'E'){
-    	}
-    	if(list[4][0] == 'W'){
-            m_gps.lon = -m_gps.lon;
-    	}
-    	// Time
-    	m_gps.hour = nmea_decimal(list[5],2);
-    	m_gps.min  = nmea_decimal(&list[5][2],2);
-    	m_gps.sec  = nmea_decimal(&list[5][4],2);
-        // Fix valid
-        if(list[6][0] == 'A') m_gps.valid = true;
-        if(list[6][0] == 'V') m_gps.valid = false;
-
-        printf("Lat %f Lon %f Alt %d Time %.2d:%.2d:%.2d Nsats %d\n\r",m_gps.lat,m_gps.lon,m_gps.alt,m_gps.hour, m_gps.min, m_gps.sec,m_gps.nsats);
-    }
-}
-void *gps_thread( void *arg){
-    FILE *fp;
-    char nmea[1025];
-    if((fp=fopen("/dev/ttyACM0","rw"))!=NULL){
-	    while(m_gps_running == true){
-	    	if(fgets( nmea, 1024, fp)!= NULL){
-	    		gps_parse_nmea(nmea);
-	    	}
-	    }
-    }
-    printf("File open failed \n\r");
-	return arg;
+// "5048.23653" with 2 degree digits -> 50.803942
+static double nmea_coord(const char *in, int deg_digits) {
+    if (!in || !in[0]) return 0.0;
+    char deg[4] = {0};
+    for (int i = 0; i < deg_digits && in[i]; i++) deg[i] = in[i];
+    double d = strtod(deg, NULL);
+    double m = strtod(in + deg_digits, NULL);
+    return d + m / 60.0;
 }
 
-int gps_open(void){
-	m_gps_running = true;
-	if(pthread_create(&m_tid, NULL, &gps_thread, NULL)!=0){
+static void gps_parse_nmea_locked(char *nmea);
+
+void gps_parse_nmea(char *nmea) {
+    if (!nmea || !nmea_chksum(nmea)) return;      // ignore corrupt lines
+    gps_parse_nmea_locked(nmea);
+}
+
+static void gps_parse_nmea_locked(char *nmea) {
+    char *list[30];
+    int nt = gps_tokenise(nmea, list, 30);
+    if (nt < 2) return;
+
+    // GGA: fix quality, position, satellites, HDOP and altitude in metres
+    if (strncmp(list[0], "$GPGGA", 6) == 0 || strncmp(list[0], "$GNGGA", 6) == 0) {
+        if (nt < 10) return;
+        int quality = atoi(list[6]);
+        if (quality > 0 && list[2][0] && list[4][0]) {
+            double lat = nmea_coord(list[2], 2);
+            double lon = nmea_coord(list[4], 3);
+            if (list[3][0] == 'S') lat = -lat;
+            if (list[5][0] == 'W') lon = -lon;
+            m_gps.lat = lat;
+            m_gps.lon = lon;
+            m_gps.valid = true;
+            m_gps.fix_ms = now_ms();
+            m_gps.nsats = (uint8_t)atoi(list[7]);
+            m_gps.hdop = (float)strtod(list[8], NULL);
+            if (list[9][0]) m_gps.alt = (int16_t)lround(strtod(list[9], NULL));  // metres
+            m_gps.validity |= GNSS_VALID_POSITION | GNSS_VALID_ALTITUDE;
+            if (m_gps.hdop > 0.0f) m_gps.validity |= GNSS_VALID_RADIUS;
+        } else {
+            m_gps.valid = false;
+        }
+        return;
+    }
+
+    // RMC: position, speed over ground (knots), track made good, date
+    if (strncmp(list[0], "$GPRMC", 6) == 0 || strncmp(list[0], "$GNRMC", 6) == 0) {
+        if (nt < 10) return;
+        if (list[2][0] == 'A') {
+            double lat = nmea_coord(list[3], 2);
+            double lon = nmea_coord(list[5], 3);
+            if (list[4][0] == 'S') lat = -lat;
+            if (list[6][0] == 'W') lon = -lon;
+            m_gps.lat = lat;
+            m_gps.lon = lon;
+            m_gps.valid = true;
+            m_gps.fix_ms = now_ms();
+            m_gps.validity |= GNSS_VALID_POSITION;
+            if (list[7][0]) {
+                // knots -> km/h, kept in 0.5 km/h steps by the META encoder
+                m_gps.speed_kmh = strtod(list[7], NULL) * 1.852;
+                m_gps.have_velocity = true;
+                m_gps.validity |= GNSS_VALID_VELOCITY;
+            }
+            if (list[8][0]) m_gps.course = (uint16_t)lround(strtod(list[8], NULL));
+        } else {
+            m_gps.valid = false;
+        }
+        if (nt > 9 && list[9][0] && strlen(list[9]) >= 6) {
+            m_gps.day   = nmea_decimal(list[9], 2);
+            m_gps.month = nmea_decimal(list[9] + 2, 2);
+            m_gps.year  = 2000 + nmea_decimal(list[9] + 4, 2);
+        }
+        if (nt > 1 && list[1][0] && strlen(list[1]) >= 6) {
+            m_gps.hour = nmea_decimal(list[1], 2);
+            m_gps.min  = nmea_decimal(list[1] + 2, 2);
+            m_gps.sec  = nmea_decimal(list[1] + 4, 2);
+        }
+        return;
+    }
+
+    // VTG: speed and course directly in km/h
+    if (strncmp(list[0], "$GPVTG", 6) == 0 || strncmp(list[0], "$GNVTG", 6) == 0) {
+        if (nt < 8) return;
+        if (list[1][0]) m_gps.course = (uint16_t)lround(strtod(list[1], NULL));
+        if (list[7][0]) m_gps.speed_kmh = strtod(list[7], NULL);
+        if (list[1][0] || list[7][0]) {
+            m_gps.have_velocity = true;
+            if (m_gps.valid) m_gps.validity |= GNSS_VALID_VELOCITY;
+        }
+        return;
+    }
+
+    // GSA: dilution of precision (fallback for HDOP)
+    if (strncmp(list[0], "$GPGSA", 6) == 0 || strncmp(list[0], "$GNGSA", 6) == 0) {
+        if (nt > 16 && m_gps.hdop <= 0.0f && list[16][0]) m_gps.hdop = (float)strtod(list[16], NULL);
+        return;
+    }
+
+    // GLL: position and time (fallback, and the time many receivers send last)
+    if (strncmp(list[0], "$GPGLL", 6) == 0 || strncmp(list[0], "$GNGLL", 6) == 0) {
+        if (nt < 7) return;
+        if (list[6][0] == 'A') {
+            double lat = nmea_coord(list[1], 2);
+            double lon = nmea_coord(list[3], 3);
+            if (list[2][0] == 'S') lat = -lat;
+            if (list[4][0] == 'W') lon = -lon;
+            m_gps.lat = lat;
+            m_gps.lon = lon;
+            m_gps.valid = true;
+            m_gps.fix_ms = now_ms();
+            m_gps.validity |= GNSS_VALID_POSITION;
+        } else {
+            m_gps.valid = false;
+        }
+        if (list[5][0] && strlen(list[5]) >= 6) {
+            m_gps.hour = nmea_decimal(list[5], 2);
+            m_gps.min  = nmea_decimal(list[5] + 2, 2);
+            m_gps.sec  = nmea_decimal(list[5] + 4, 2);
+        }
+        return;
+    }
+}
+
+int nmea_decimal(const char *in, int n) {
+    int v = 0;
+    for (int i = 0; i < n && in[i]; i++) {
+        if (in[i] < '0' || in[i] > '9') break;
+        v *= 10;
+        v += in[i] - '0';
+    }
+    return v;
+}
+
+// ---------------------------------------------------------------------------
+// Reader thread: reconnects by itself, and exits on close
+// ---------------------------------------------------------------------------
+void *gps_thread(void *arg) {
+    (void)arg;
+    char line[512];
+    int  used = 0;
+    char dev[160];
+
+    while (m_gps_running) {
+        resolve_device(dev, sizeof(dev));
+        m_fd = open_port(dev);
+        if (m_fd < 0) {
+            snprintf(m_status, sizeof(m_status), "cannot open %s: %s", dev, strerror(errno));
+            // Try again: the receiver may not be plugged in yet.
+            for (int i = 0; i < 20 && m_gps_running; i++) usleep(100000);
+            continue;
+        }
+        snprintf(m_status, sizeof(m_status), "listening on %s at %d baud", dev, m_baud);
+        printf("m17web: GPS on %s at %d baud\n", dev, m_baud);
+
+        used = 0;
+        while (m_gps_running) {
+            char buf[256];
+            ssize_t n = read(m_fd, buf, sizeof(buf));
+            if (n < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue;
+                break;                                  // device went away
+            }
+            if (n == 0) continue;                       // read timeout
+            for (ssize_t i = 0; i < n; i++) {
+                char c = buf[i];
+                if (c == '\n' || c == '\r') {
+                    if (used > 6) {
+                        line[used] = 0;
+                        gps_parse_nmea(line);
+                    }
+                    used = 0;
+                } else if (used < (int)sizeof(line) - 1) {
+                    line[used++] = c;
+                }
+            }
+        }
+        close(m_fd);
+        m_fd = -1;
+        if (m_gps_running) {
+            snprintf(m_status, sizeof(m_status), "%s went away, reopening", dev);
+            usleep(500000);
+        }
+    }
+    snprintf(m_status, sizeof(m_status), "stopped");
+    return arg;
+}
+
+int gps_open(void) {
+    if (m_thread_started) return 0;
+    m_gps_running = true;
+    m_gps.validity = 0;
+    m_gps.station_type = GNSS_STATION_FIXED;   // a home station; see GNSS_STATION_* in m17defines.h
+    if (pthread_create(&m_tid, NULL, &gps_thread, NULL) != 0) {
         printf("GPS thread cannot be started\n\r");
+        m_gps_running = false;
         return -1;
     }
-	return 0;
+    m_thread_started = true;
+    return 0;
 }
-void gps_close(void){
-	m_gps_running = false;
+
+void gps_close(void) {
+    if (!m_thread_started) return;
+    m_gps_running = false;
+    pthread_join(m_tid, NULL);          // the read has a 1 s timeout, so this returns
+    m_thread_started = false;
+}
+
+// ---------------------------------------------------------------------------
+// Fix state for the rest of the program
+// ---------------------------------------------------------------------------
+bool gps_fix_fresh(int max_age_ms) {
+    if (!m_gps.valid) return false;
+    uint32_t age = now_ms() - m_gps.fix_ms;
+    return age <= (uint32_t)max_age_ms;
+}
+
+uint32_t gps_fix_age_ms(void) {
+    if (!m_gps.fix_ms) return 0;
+    return now_ms() - m_gps.fix_ms;
+}
+
+double gps_lat(void) { return m_gps.lat; }
+double gps_lon(void) { return m_gps.lon; }
+
+void gps_status_text(char *out, int len) {
+    if (!m_gps.valid) { snprintf(out, len, "no fix"); return; }
+    char grid[12];
+    gps_maidenhead(grid, sizeof(grid));
+    snprintf(out, len, "%.5f, %.5f %s %dsat%s%s", m_gps.lat, m_gps.lon, grid, m_gps.nsats,
+             m_gps.hdop > 0.0f ? "" : "", "");
+}
+
+// ---------------------------------------------------------------------------
+// Maidenhead locator
+// ---------------------------------------------------------------------------
+void gps_maidenhead_of(double lat, double lon, char *out, int len) {
+    if (len < 7) { if (len > 0) out[0] = 0; return; }
+    if (lon < -180.0) lon = -180.0;
+    if (lon >  180.0) lon =  180.0;
+    if (lat <  -90.0) lat =  -90.0;
+    if (lat >   90.0) lat =   90.0;
+
+    double lo = lon + 180.0;                 // 0..360
+    double la = lat +  90.0;                 // 0..180
+
+    int f_lo = (int)(lo / 20.0);             // field, A..R
+    int f_la = (int)(la / 10.0);
+    lo -= f_lo * 20.0;
+    la -= f_la * 10.0;
+
+    int s_lo = (int)(lo / 2.0);              // square, 0..9
+    int s_la = (int)(la / 1.0);
+    lo -= s_lo * 2.0;
+    la -= s_la * 1.0;
+
+    int t_lo = (int)(lo / (2.0 / 24.0));     // subsquare, A..X
+    int t_la = (int)(la / (1.0 / 24.0));
+
+    if (f_lo > 17) f_lo = 17; if (f_la > 17) f_la = 17;
+    if (s_lo > 9)  s_lo = 9;  if (s_la > 9)  s_la = 9;
+    if (t_lo > 23) t_lo = 23; if (t_la > 23) t_la = 23;
+
+    char buf[8];
+    buf[0] = (char)('A' + f_lo);
+    buf[1] = (char)('A' + f_la);
+    buf[2] = (char)('0' + s_lo);
+    buf[3] = (char)('0' + s_la);
+    buf[4] = (char)('A' + t_lo);
+    buf[5] = (char)('A' + t_la);
+    buf[6] = 0;
+
+    int n = (len < 7) ? len : 7;      // six characters plus the terminator
+    snprintf(out, n, "%s", buf);
+}
+
+void gps_maidenhead(char *out, int len) {
+    if (!m_gps.valid) { if (len > 0) snprintf(out, len, "--"); return; }
+    gps_maidenhead_of(m_gps.lat, m_gps.lon, out, len);
+}
+
+// ---------------------------------------------------------------------------
+// M17 LSF META "GNSS Position Data" (encryption subtype 01), 14 bytes / 112 bits
+//
+// Layout as of specification 2.0.9 - values are metric, and the order is:
+//   byte 0      Data Source (4) | Station Type (4)
+//   byte 1      Validity (4) | Radius (3) | Bearing bit 8 (1)
+//   byte 2      Bearing bits 7..0
+//   bytes 3..5  Latitude,  24 bit two's complement, +-8388607 = +-90 degrees
+//   bytes 6..8  Longitude, 24 bit two's complement, +-8388607 = +-180 degrees
+//   bytes 9..10 Altitude,  16 bit, 0.5 m steps, offset 500 m
+//   byte 11     Speed bits 11..4
+//   byte 12     Speed bits 3..0 | Reserved (4)
+//   byte 13     Reserved
+//
+// Bit packing is done with a small MSB-first writer rather than shifts, because
+// the fields do not sit on byte boundaries.
+// ---------------------------------------------------------------------------
+typedef struct {
+    uint8_t *b;
+    int bit;
+} BitWriter;
+
+static void bw_put(BitWriter *w, uint32_t value, int bits) {
+    for (int i = bits - 1; i >= 0; i--) {
+        int byte = w->bit >> 3;
+        int mask = 0x80 >> (w->bit & 7);
+        if ((value >> i) & 1) w->b[byte] |= mask;
+        else                  w->b[byte] &= (uint8_t)~mask;
+        w->bit++;
+    }
+}
+
+static uint32_t bw_get(const uint8_t *b, int *bit, int bits) {
+    uint32_t v = 0;
+    for (int i = 0; i < bits; i++) {
+        int byte = *bit >> 3;
+        int mask = 0x80 >> (*bit & 7);
+        v = (v << 1) | ((b[byte] & mask) ? 1u : 0u);
+        (*bit)++;
+    }
+    return v;
+}
+
+// The specification describes the radius as an HDOP-derived lateral uncertainty
+// but does not define a mapping to the 3 bit field, so this is a documented
+// approximation: bands of uncertainty in metres, 0 = unknown.
+static uint32_t radius_code(float hdop) {
+    if (hdop <= 0.0f) return 0;
+    double m = hdop * 5.0;                       // conservative: ~5 m per HDOP unit
+    if (m <   2.0) return 1;
+    if (m <   5.0) return 2;
+    if (m <  10.0) return 3;
+    if (m <  25.0) return 4;
+    if (m <  50.0) return 5;
+    if (m < 100.0) return 6;
+    return 7;
+}
+
+void gps_encode(uint8_t *b, GpsMsg *msg) {
+    memset(b, 0, 14);
+
+    BitWriter w = { b, 0 };
+    bw_put(&w, GNSS_SOURCE_M17_CLIENT, 4);
+    bw_put(&w, msg->station_type, 4);
+
+    bw_put(&w, msg->validity, 4);
+    bw_put(&w, radius_code(msg->hdop), 3);
+
+    uint32_t bearing = msg->course % 360;
+    bw_put(&w, (bearing >> 8) & 0x01, 1);        // most significant bit
+    bw_put(&w, bearing & 0xFF, 8);
+
+    long lat = lround(msg->lat / 90.0  * 8388607.0);
+    long lon = lround(msg->lon / 180.0 * 8388607.0);
+    if (lat >  8388607) lat =  8388607;
+    if (lat < -8388607) lat = -8388607;
+    if (lon >  8388607) lon =  8388607;
+    if (lon < -8388607) lon = -8388607;
+    bw_put(&w, (uint32_t)lat & 0xFFFFFF, 24);
+    bw_put(&w, (uint32_t)lon & 0xFFFFFF, 24);
+
+    long alt = lround((msg->alt + 500.0) / 0.5);
+    if (alt < 0) alt = 0;
+    if (alt > 65535) alt = 65535;
+    bw_put(&w, (uint32_t)alt, 16);
+
+    long spd = lround(msg->speed_kmh / 0.5);
+    if (spd < 0) spd = 0;
+    if (spd > 4095) spd = 4095;
+    bw_put(&w, (uint32_t)spd, 12);
+    bw_put(&w, 0, 4);                            // reserved
+    bw_put(&w, 0, 8);                            // reserved
+}
+
+void gps_decode(uint8_t *b, GpsMsg *msg) {
+    int bit = 0;
+    uint32_t source = bw_get(b, &bit, 4);
+    uint32_t station = bw_get(b, &bit, 4);
+    uint32_t validity = bw_get(b, &bit, 4);
+    uint32_t radius = bw_get(b, &bit, 3);
+    uint32_t bearing = (bw_get(b, &bit, 1) << 8);
+    bearing |= bw_get(b, &bit, 8);
+    uint32_t lat = bw_get(b, &bit, 24);
+    uint32_t lon = bw_get(b, &bit, 24);
+    uint32_t alt = bw_get(b, &bit, 16);
+    uint32_t spd = bw_get(b, &bit, 12);
+
+    (void)source;
+    (void)radius;
+    msg->station_type = (uint8_t)station;
+    msg->validity     = (uint8_t)validity;
+    msg->course       = (uint16_t)bearing;
+    msg->speed_kmh    = spd * 0.5;
+    msg->alt          = (int16_t)lround(alt * 0.5 - 500.0);
+    msg->lat          = (double)(int32_t)(lat << 8) / 256.0 / 8388607.0 * 90.0;
+    msg->lon          = (double)(int32_t)(lon << 8) / 256.0 / 8388607.0 * 180.0;
+    msg->valid        = (validity & GNSS_VALID_POSITION) ? true : false;
+}
+
+// One line describing a received position, for the log and the web interface.
+void gps_format_position(double lat, double lon, char *out, int len) {
+    char grid[12];
+    gps_maidenhead_of(lat, lon, grid, sizeof(grid));
+    snprintf(out, len, "%.5f, %.5f (%s)", lat, lon, grid);
 }

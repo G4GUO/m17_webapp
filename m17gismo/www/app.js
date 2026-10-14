@@ -117,6 +117,7 @@ function applyState(s) {
   if (document.activeElement !== $('audioselect')) $('audioselect').value = s.audio || 'browser';
   renderAudioStatus(s);
   renderTxHealth(s);
+  renderPosition(s);
   $('simrow').style.display = (s.radio === 'sim') ? 'flex' : 'none';
 }
 
@@ -175,6 +176,50 @@ function renderAudioStatus(s) {
 
 // Transmit health: blank frames sent before the voice, and how much microphone
 // audio the transmitter lost this session (card overruns, or padded silence).
+// Position: the GPS fix, and the Maidenhead locator computed from it
+function renderPosition(s) {
+  const g = s.gps || {};
+  const grid = (g.grid || '').trim();
+  $('grid').textContent = (grid && grid !== '--') ? grid : '------';
+  $('latlon').textContent = g.valid
+    ? Number(g.lat).toFixed(5) + ', ' + Number(g.lon).toFixed(5)
+    : 'no fix';
+  const bits = [];
+  if (g.valid) {
+    if (g.sats) bits.push(g.sats + ' satellites');
+    if (g.hdop) bits.push('HDOP ' + Number(g.hdop).toFixed(2));
+    if (g.alt_m !== undefined) bits.push(g.alt_m + ' m');
+    if (g.age_s !== undefined) bits.push('updated ' + Number(g.age_s).toFixed(1) + 's ago');
+  }
+  if (g.status) bits.push(g.status);
+  $('gpsdetail').textContent = bits.join(' \u00b7 ') || 'waiting for the GPS...';
+  // The same information in the top bar
+  const hg = $('hdrgrid');
+  hg.textContent = (grid && grid !== '--') ? grid : '------';
+  hg.className = 'val grid' + (g.fresh ? ' live' : '');
+  $('hdrlatlon').textContent = g.valid
+    ? Number(g.lat).toFixed(5) + ', ' + Number(g.lon).toFixed(5)
+    : 'no fix';
+  const hgn = $('hdrgnss');
+  hgn.textContent = g.tx ? 'sending' : (g.valid ? 'ready' : 'none');
+  hgn.className = 'val' + (g.tx ? ' live' : '');
+
+  // A position heard from another station
+  const hd = s.heard, hel = $('heard');
+  if (hd && hd.grid) {
+    hel.style.display = '';
+    hel.textContent = 'heard ' + hd.src + ' at ' + hd.grid +
+      ' (' + Number(hd.lat).toFixed(5) + ', ' + Number(hd.lon).toFixed(5) + ', ' +
+      Number(hd.age_s).toFixed(0) + 's ago)';
+  } else {
+    hel.style.display = 'none';
+  }
+
+  const flag = $('gnssflag');
+  flag.textContent = g.tx ? 'position sent' : (g.valid ? 'position ready' : 'not sent');
+  flag.className = 'badge' + (g.tx ? ' ok' : (g.valid ? ' sig' : ''));
+}
+
 function renderTxHealth(s) {
   const el = $('txdrops');
   if (!el) return;
@@ -279,6 +324,11 @@ function wire() {
   });
 
   $('audioselect').onchange = (e) => cmd('audio ' + e.target.value);
+  $('copygrid').onclick = () => {
+    const t = $('grid').textContent.trim();
+    if (navigator.clipboard && t.indexOf('-') === -1) navigator.clipboard.writeText(t);
+  };
+
   $('leadframes').onchange = (e) => {
     const v = Math.max(0, Math.min(50, Number(e.target.value) || 0));
     e.target.value = v - (v % 2);          // whole sub frames only

@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <memory.h>
 #include <pthread.h>
+#include <time.h>
 #include "m17defines.h"
 // codec2 (or the modified codec through codec2mod/codec2_shim.h) is included by
 // m17defines.h according to CODEC2_BACKEND.
@@ -26,6 +27,47 @@ static NetState m_net_state = STATE_RX;
 // m17_tx_lead_in().  Even numbers only: two codec frames make one M17 sub frame.
 static int m_tx_lead_frames = 4;              // 80 ms
 static pthread_mutex_t m_lead_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+// ---------------------------------------------------------------------------
+// GNSS position in the LSF META field
+//
+// When the TYPE field's encryption subtype bits are 0b01 the META field carries
+// the station's position (see META_* in m17defines.h). It is written just before
+// the link setup frame goes out, and refreshed at superframe boundaries during
+// the over - no more often than every 5 seconds, because the specification says
+// a receiver may only be expected to notice a change that often.
+// ---------------------------------------------------------------------------
+static volatile bool m_gnss_tx;               // GNSS is in the META field
+static uint32_t      m_gnss_tx_ms;            // when it was last written
+
+static uint32_t tx_now_ms(void){
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint32_t)(t.tv_sec * 1000 + t.tv_nsec / 1000000);
+}
+
+static void m17_tx_meta_from_gps(bool force){
+    if (!gps_fix_fresh(30000)) {
+        // No usable fix: announce nothing rather than a stale position.
+        if (m_gnss_tx) {
+            memset(m_meta, 0, sizeof(m_meta));
+            m_type.est = META_TEXT;
+            m_gnss_tx = false;
+        }
+        return;
+    }
+    uint32_t now = tx_now_ms();
+    if (!force && (now - m_gnss_tx_ms) < 5000) return;
+    GpsMsg g = m_gps;                       // copy: the reader thread updates it
+    gps_encode(m_meta, &g);
+    m_type.est = META_GNSS;
+    m_gnss_tx  = true;
+    m_gnss_tx_ms = now;
+}
+
+bool m17_tx_gnss(void){
+    return m_gnss_tx;
+}
 
 int  m17_tx_lead_frames(void) { return m_tx_lead_frames; }
 void m17_tx_set_lead_frames(int frames) {
@@ -152,6 +194,8 @@ void *m17_txrx_thread(void *arg){
 		    m17_send_carrier();
 		    m17_send_preamble();
 		    m17_send_preamble();
+		    // Put the current position in the META field before announcing it
+		    m17_tx_meta_from_gps(true);
 		    // Send link setup
 		    m17_send_link_setup_frame(m17_db_get_dst(), m17_db_get_src(), m_type, m_meta);
 		    // A couple of blank codec frames before the voice (see m17_tx_lead_in)
@@ -179,6 +223,9 @@ void *m17_txrx_thread(void *arg){
 #ifdef M17WEB_DIAG
 			    clock_gettime(CLOCK_MONOTONIC, &d2);
 #endif
+			    // New superframe: the LICH is starting again, so this is the point
+			    // at which the META field (and the position in it) may change.
+			    if (m17_tx_lich_index() == 0) m17_tx_meta_from_gps(false);
 			    // Send Sub frame
 			    m17_send_stream_frame( payload );
 #ifdef M17WEB_DIAG
@@ -220,6 +267,8 @@ void *m17_txrx_thread(void *arg){
 		    m17_send_carrier();
 		    m17_send_preamble();
 		    m17_send_preamble();
+		    // Put the current position in the META field before announcing it
+		    m17_tx_meta_from_gps(true);
 		    // Send link setup
 		    m17_send_link_setup_frame(m17_db_get_dst(), m17_db_get_src(), m_type, m_meta);
 		    // A couple of blank codec frames before the voice (see m17_tx_lead_in)
@@ -236,6 +285,9 @@ void *m17_txrx_thread(void *arg){
 			    // Read Audio samples and encode using Codec 2
 			    audio_input(m_amicsamples, m_nsam);
 			    codec2_encode(m_codec2, &payload[8], m_amicsamples);
+			    // New superframe: the LICH is starting again, so this is the point
+			    // at which the META field (and the position in it) may change.
+			    if (m17_tx_lich_index() == 0) m17_tx_meta_from_gps(false);
 			    // Send Sub frame
 			    m17_send_stream_frame( payload );
 			    // Apply a backend change made in the web UI (browser <-> Pi sound
@@ -298,6 +350,7 @@ void *m17_txrx_client_thread(void *arg){
 		if( m_ptt == PTT_TX){
 		    audio_mic_open();
 		    // Send link setup
+		    m17_tx_meta_from_gps(true);
 		    m17_send_link_setup_frame_to_net(m17_db_get_dst(), m17_db_get_src(), m_type, m_meta);
 		    // A couple of blank codec frames before the voice (see m17_tx_lead_in)
 		    m17_tx_lead_in_to_net();
@@ -311,6 +364,7 @@ void *m17_txrx_client_thread(void *arg){
 			    // Read Audio samples and encode using Codec 2
 			    audio_input(m_amicsamples, m_nsam);
 			    codec2_encode(m_codec2, &payload[8], m_amicsamples);
+			    if (m17_tx_lich_index() == 0) m17_tx_meta_from_gps(false);
 			    // Send Sub frame
 			    m17_send_stream_frame_to_net( payload );
 			    radio_power_update();

@@ -25,10 +25,17 @@ upstream's own; everything front-end related is new.
 | Voice audio | PulseAudio on the Pi | browser mic/speaker (WebAudio) by default; `pulse`, `both`, `file`, `none` selectable at run time |
 | Radio | Pluto / LimeSDR | plus a **simulated radio** (`radio_sim.cpp`) so everything runs with no hardware |
 | UI boundary | `gui_*()` calls scattered through the code | same names, now declared in `ui.h` and implemented by either front end |
+| GPS | NMEA reader in `gps.cpp`: hard-coded `/dev/ttyACM0`, no port speed, pre-2.0 GNSS encoder, result unused | device resolved by identity under `/dev/serial/by-id`, raw 38400 set with termios, Maidenhead locator, specification 2.0.9 META payload, received positions decoded and shown |
 | Binary | `m17gismo` | `m17web` |
 
-Nothing in `m17_*.cpp`, `pluto.cpp`, `lime.cpp`, `gps.cpp`, `buffers.cpp` was
-rewritten for the web UI.  Small additive changes only: a reflector-module
+`gps.cpp` is the exception: upstream's reader opened a hard-coded
+`/dev/ttyACM0` - which on a machine with a PlutoSDR attached is the Pluto's
+serial console, not the receiver - never set the port speed, and its GNSS
+encoder predated the specification 2.0 layout.  It has been rewritten; see
+"GPS: the station's position, and the Maidenhead locator" below.
+
+Nothing in `m17_*.cpp`, `pluto.cpp`, `lime.cpp`, `buffers.cpp` was rewritten for
+the web UI.  Small additive changes only: a reflector-module
 getter, gain/name/type getters, a `radio_keyed()` fix (upstream always called
 the Lime function, so a Pluto station could never read its own PTT input), and
 compile guards so back ends are selected at build time.
@@ -131,6 +138,89 @@ Wire protocol (WebSocket at `/ws`): JSON text frames for state (`{"t":"state",..
 log lines, command responses, help text and the reflector list; binary frames
 for audio, tagged `0x01` + s16le PCM (8 kHz mono) for the microphone and `0x02`
 + PCM for decoded receive audio.
+
+## GPS: the station's position, and the Maidenhead locator
+
+A GPS receiver plugged into the Pi is read over its serial port, shown in the web
+interface, and - while the fix is fresh - broadcast in the M17 link setup frame
+as the GNSS position data, so other stations can see where you are.
+
+### Which device, and at what speed
+
+The receiver used here is a u-blox 7 on USB.  It is a CDC-ACM device, so it
+appears as `/dev/ttyACM<n>`, **not** `/dev/ttyUSB<n>`.  Two things follow:
+
+* **The port number is not stable.**  A PlutoSDR also presents a serial port, and
+  which one gets `ttyACM0` depends on what enumerated first - the same hardware
+  here has been both `ttyACM0` and `ttyACM1` across reboots.  The program
+  therefore resolves the receiver *by identity* under `/dev/serial/by-id/`
+  (`*u-blox*`, then `*GPS*`), so the number never matters.  A hard-coded
+  `ttyACM0` opens the Pluto's console instead.
+* **The speed must be set explicitly.**  This receiver only emits navigation
+  sentences at **38400** baud; at its default it sends its banner text and
+  nothing else.  The port is set to raw 38400 with termios rather than inheriting
+  whatever the driver left behind.
+
+Override the auto-detection when needed:
+
+    gps                      # device, speed, status, fix and locator
+    gps /dev/ttyACM1 38400   # a specific device and speed
+
+`M17WEB_GPS=/dev/ttyACM1` does the same at startup.  If the receiver is unplugged
+and plugged back in, the reader reopens it by itself.
+
+### What is done with the fix
+
+* **Display.**  The top bar carries the locator, the latitude/longitude, and
+  whether the position is going out (`gnss: sending`).  The Position panel has
+  the locator in large type (with a *copy locator* button), plus satellites,
+  HDOP, altitude and the age of the fix.
+* **Maidenhead locator** is computed from the fix - `IO90ST` for the position
+  used while testing here - six characters: field, square, subsquare.
+* **Transmitted position.**  The TYPE field's encryption subtype bits select what
+  the META field carries; the program sets them to `0b01` (GNSS position) while
+  the fix is fresh and clears them back to `0b00` when it is stale, so a stale
+  position is never announced.  META travels in the LICH, part of the LSF that
+  repeats every superframe, so the position is refreshed at superframe boundaries
+  and at most once every 5 s - the rate at which the specification says a
+  receiver may be expected to notice a change.
+* **Received positions are decoded too:** another station sending its position
+  produces a log line and appears under the Position panel as "heard ...".
+
+### The payload: metric, per specification 2.0.9
+
+14 bytes / 112 bits: data source and station type, a validity nibble with a 3 bit
+HDOP-derived radius, a 9 bit bearing, 24 bit latitude and longitude, 16 bit
+altitude in 0.5 m steps offset by 500 m, and 12 bit speed in 0.5 km/h steps.
+Altitude is in **metres**: the specification changed from feet and reordered the
+fields in version 2.0, so anything written against the older layout is not
+compatible.  The specification describes the radius as an estimate of lateral
+position uncertainty based on HDOP but defines no mapping to the 3 bit field;
+`radius_code()` in `gps.cpp` uses bands of uncertainty in metres, which is a
+documented approximation rather than a guess at intent.
+
+### How this was checked
+
+* `tests/gps_test.cpp` - known locators (including `IO90ST`), a round trip over
+  all 32 400 field/square centres and 576 subsquares, and an encode/decode round
+  trip of the META payload.
+* `tools/gps_meta_decode.py` - decodes the META bytes from the specification
+  rather than from the C, so the encoder is checked independently.
+* The whole chain was then proved without hardware: the simulated radio in
+  duplex mode loops the transmitter into the receiver, so the station demodulated
+  its own signal and decoded the position back out of the LSF:
+
+```
+GNSS: G4GUO at 50.80371, -0.44190 IO90ST, 10 m, 0 deg, 0.5 km/h
+```
+
+To repeat it (note `td`, duplex: simplex transmit does not run the demodulator,
+so nothing comes back):
+
+    ./m17web -r sim -a none -w 8081
+    python3 tools/wstest.py --port 8081 --cmd "sa G4GUO"
+    python3 tools/wstest.py --port 8081 --cmd "td" --duration 18
+    grep GNSS run.log
 
 ## Transmit samples used to be dropped: the rates and the fix
 
@@ -326,6 +416,7 @@ Commands: `sim loop on|off`, `sim realtime on|off`, `sim noise 0.0-0.5`.
 | `pi_m17web.sh` | start/stop/status/log on the Pi with a generated test `config.txt` |
 | `deploy_pi.sh` | rsync the sources to the Pi and build there |
 | `embed_www.py` | generate `www_assets.h` from `www/` |
+| `gps_meta_decode.py` | decode an M17 META GNSS payload, written from the specification (not from the C) so the encoder can be checked independently |
 
 Example session (on the Pi):
 

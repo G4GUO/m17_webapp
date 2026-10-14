@@ -216,6 +216,32 @@ static void build_state(char *out, int len) {
         o = json_add(out, len, o, ",\"mic_open\":%s,\"spk_open\":%s",
                      mic ? "true" : "false", spk ? "true" : "false");
     }
+    {
+        // Position: the fix, its age, and the Maidenhead locator for the UI
+        char grid[12], dev[160];
+        bool fresh = gps_fix_fresh(60000);
+        gps_maidenhead(grid, sizeof(grid));
+        snprintf(dev, sizeof(dev), "%s", gps_status());
+        for (char *q = dev; *q; q++) if (*q == '"' || *q == '\\') *q = '-';
+        {
+            // Position heard from another station in its LSF META field
+            GpsMsg rx; char rsrc[16] = "";
+            if (gps_rx_position(&rx, rsrc, sizeof(rsrc))) {
+                char rgrid[12];
+                gps_maidenhead_of(rx.lat, rx.lon, rgrid, sizeof(rgrid));
+                o = json_add(out, len, o, ",\"heard\":{\"src\":\"%s\",\"lat\":%.6f,\"lon\":%.6f,"
+                             "\"grid\":\"%s\",\"alt_m\":%d,\"speed_kmh\":%.1f,\"age_s\":%.1f}",
+                             rsrc, rx.lat, rx.lon, rgrid, (int)rx.alt, rx.speed_kmh, gps_rx_age_ms() / 1000.0);
+            }
+        }
+        o = json_add(out, len, o, ",\"gps\":{\"valid\":%s,\"fresh\":%s,\"tx\":%s,\"lat\":%.6f,\"lon\":%.6f,"
+                     "\"grid\":\"%s\",\"alt_m\":%d,\"speed_kmh\":%.1f,\"course\":%d,\"hdop\":%.2f,"
+                     "\"sats\":%d,\"age_s\":%.1f,\"status\":\"%s\"}",
+                     m_gps.valid ? "true" : "false", fresh ? "true" : "false",
+                     m17_tx_gnss() ? "true" : "false",
+                     m_gps.lat, m_gps.lon, grid, (int)m_gps.alt, m_gps.speed_kmh, (int)m_gps.course,
+                     m_gps.hdop, (int)m_gps.nsats, gps_fix_age_ms() / 1000.0, dev);
+    }
     o = json_add(out, len, o, ",\"clients\":%d", m_srv ? ws_client_count(m_srv) : 0);
     o = json_add(out, len, o, ",\"rx_stream\":%lu", (unsigned long)(db->n_frames - m_frames_seen));
     o = json_add(out, len, o, ",\"uptime\":%ld}", (long)(now_ms() / 1000));

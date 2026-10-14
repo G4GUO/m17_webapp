@@ -14,6 +14,9 @@
   <div class="hdr-item"><span class="lbl">mode</span><span id="mode" class="val">-</span></div>
   <div class="hdr-item"><span class="lbl">audio</span><span id="audiobackend" class="val">-</span></div>
   <div class="hdr-item"><span class="lbl">clients</span><span id="clients" class="val">0</span></div>
+  <div class="hdr-item"><span class="lbl">locator</span><span id="hdrgrid" class="val grid">------</span></div>
+  <div class="hdr-item"><span class="lbl">position</span><span id="hdrlatlon" class="val">no fix</span></div>
+  <div class="hdr-item"><span class="lbl">gnss</span><span id="hdrgnss" class="val">none</span></div>
   <div id="link" class="link off">offline</div>
 </header>
 
@@ -85,6 +88,26 @@
         <button id="discbtn" data-cmd="disc">disconnect</button>
         <span id="refstatus" class="badge">not connected</span>
       </div>
+    </div>
+
+    <div class="card">
+      <h2>Position <span class="badge" id="gnssflag">not sent</span></h2>
+      <div class="gridrow">
+        <span id="grid" class="maidenhead">------</span>
+        <span class="lbl" id="latlon">no fix</span>
+      </div>
+      <div class="row">
+        <button id="copygrid" class="mini">copy locator</button>
+        <span class="lbl">Maidenhead locator</span>
+      </div>
+      <p class="note" id="gpsdetail">waiting for the GPS&hellip;</p>
+      <p class="note" id="heard" style="display:none"></p>
+      <p class="note">
+        The GPS receiver is read over its serial port. When the fix is fresh the
+        position is put in the M17 link setup frame as the GNSS position data
+        (META field), refreshed at superframe boundaries and no more often than
+        every 5&nbsp;s, as the specification requires.
+      </p>
     </div>
 
     <div class="card">

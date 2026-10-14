@@ -29,6 +29,23 @@ int m17_fmt_add_tx_preamble( uint8_t *dibits ){
 	}
 	return idx;
 }
+// Index of the next 5 byte LICH chunk. 0 means a new superframe is starting,
+// which is the only point at which the META field may change.
+int m17_tx_lich_index(void){
+	return m_lich_count;
+}
+
+// Replace the META field of the current LICH and refresh its CRC. Used to carry
+// a fresh GNSS position during a transmission: the six stream frames of a
+// superframe carry the whole LSF, so rewriting it here changes what the next six
+// frames announce (and the CRC changes with it).
+void m17_update_meta(uint8_t *meta){
+	pack_8_to_8(meta, &m_lich[14], 14);
+	uint16_t crc = m17_crc_array_encode(m_lich, 28);
+	m_lich[28] = (crc>>8);
+	m_lich[29] = (crc&0xFF);
+}
+
 void m17_send_dibit_array(void){
 	m17_mod_dibits(m_tx_d, m_tx_l);
 	m_tx_l = 0;

@@ -122,17 +122,25 @@ typedef struct{
 }M17_Dbase;
 
 typedef struct{
-	bool valid;
-	double lat;
-	double lon;
-	int16_t alt;
+	bool valid;                 // position is valid (fresh fix)
+	double lat;                 // degrees, +N -S
+	double lon;                 // degrees, +E -W
+	int16_t alt;                // metres above mean sea level (M17 META is metric)
 	uint8_t hour;
 	uint8_t min;
 	uint8_t sec;
-	uint16_t course;
-	uint16_t speed;
+	uint8_t day, month;
+	uint16_t year;
+	uint16_t course;            // degrees true
+	uint16_t speed;             // (unused, kept for the old encoding)
+	double speed_kmh;           // km/h from RMC/VTG
+	bool have_velocity;         // speed and course are meaningful
+	float hdop;                 // horizontal dilution of precision
+	uint8_t validity;           // GNSS_VALID_* bit mask for the META field
+	uint8_t station_type;       // GNSS_STATION_* for the META field
+	uint8_t nsats;              // satellites used
+	uint32_t fix_ms;            // CLOCK_MONOTONIC ms of the last fix
 	uint32_t object;
-	uint8_t nsats;
 }GpsMsg;
 
 typedef struct{
@@ -346,6 +354,11 @@ void m17_init_de_correlate(void);
 // Tx frames
 //
 void m17_send_preamble(void);
+// LICH / META during transmit (the GNSS position lives in the META field)
+void m17_update_meta(uint8_t *meta);
+int  m17_tx_lich_index(void);
+bool m17_tx_gnss(void);
+
 void m17_send_link_setup_frame(uint48_t dest, uint48_t src, M17Type type, uint8_t *meta);
 void m17_send_link_setup_frame_to_net(uint48_t dest, uint48_t src, M17Type type, uint8_t *meta);
 void m17_send_link_setup_frame_fm_net(uint8_t *net);
@@ -506,11 +519,45 @@ uint8_t *buff_get(void);
 void buff_open(void);
 void buff_close(void);
 
+// GPS / M17 META GNSS position data (specification 2.0.9, encryption subtype 01)
+#define GNSS_VALID_POSITION  0x8   // latitude/longitude valid
+#define GNSS_VALID_ALTITUDE  0x4   // altitude valid
+#define GNSS_VALID_VELOCITY  0x2   // bearing and speed valid
+#define GNSS_VALID_RADIUS    0x1   // radius (HDOP-derived) valid
+
+#define GNSS_SOURCE_M17_CLIENT 0   // Data Source field: 0 = M17 client
+#define GNSS_STATION_FIXED     0
+#define GNSS_STATION_MOBILE    1
+#define GNSS_STATION_HANDHELD  2
+#define GNSS_STATION_OTHER     15
+
+// META content selected by the stream TYPE "encryption subtype" bits when the
+// encryption type is none
+#define META_TEXT           0
+#define META_GNSS           1
+#define META_EXT_CALLSIGN   2
+
 // GPS
 void gps_decode(uint8_t *b, GpsMsg *msg);
 void gps_encode(uint8_t *b, GpsMsg *msg);
 int gps_open(void);
 void gps_close(void);
+void gps_set_device(const char *dev, int baud);   // "" baud 0 = auto-detect
+const char *gps_device(void);
+int  gps_baud(void);
+const char *gps_status(void);                     // last open/reopen result
+bool gps_fix_fresh(int max_age_ms);               // valid fix within max_age_ms
+uint32_t gps_fix_age_ms(void);                    // age of the last fix, ms
+bool gps_rx_position(GpsMsg *out, char *src, int n);  // last position heard from another station
+uint32_t gps_rx_age_ms(void);
+double gps_lat(void);
+double gps_lon(void);
+int  nmea_decimal(const char *in, int n);         // used while parsing
+void gps_maidenhead(char *out, int len);          // locator for the current fix
+void gps_maidenhead_of(double lat, double lon, char *out, int len);
+void gps_status_text(char *out, int len);         // one line for the log
+void gps_format_position(double lat, double lon, char *out, int len);
+extern GpsMsg m_gps;
 
 #ifdef __TEST__
 // test routines

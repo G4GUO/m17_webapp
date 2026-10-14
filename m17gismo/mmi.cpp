@@ -172,6 +172,26 @@ void mmi_parse(char *cmd){
 		valid = true;
 	}
 
+	// GPS receiver: status, or pick a different device / speed
+	if(strncmp(token[0],"gps",3)==0){
+		if(nt == 1){
+			char st[160], grid[12];
+			gps_status_text(st, sizeof(st));
+			gps_maidenhead(grid, sizeof(grid));
+			printf("GPS %s at %d baud\n", gps_device()[0] ? gps_device() : "(auto-detect)", gps_baud());
+			printf("  status   %s\n", gps_status());
+			printf("  position %s  locator %s\n", st, grid);
+			printf("  altitude %d m\n", (int)m_gps.alt);
+			printf("  sent in META %s\n\r", m17_tx_gnss() ? "yes" : "no");
+		} else {
+			gps_close();
+			gps_set_device(token[1], nt > 2 ? atoi(token[2]) : 0);
+			gps_open();
+			printf("GPS reopened on %s\n\r", token[1]);
+		}
+		valid = true;
+	}
+
 	// Blank frames sent before the voice, in codec frames (2 = 40 ms)
 	if(strncmp(token[0],"lead",4)==0){
 		if(nt == 2){

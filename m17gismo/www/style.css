@@ -77,6 +77,29 @@ progress::-webkit-progress-value { background: linear-gradient(90deg, var(--gree
 progress::-moz-progress-bar { background: linear-gradient(90deg, var(--green), var(--amber)); }
 
 .log-card { display: flex; flex-direction: column; }
+header { flex-wrap: wrap; }
+.val.grid {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.15em;
+  letter-spacing: 0.08em;
+  color: var(--green);
+}
+.val.live { color: var(--green); }
+
+.gridrow {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75em;
+  flex-wrap: wrap;
+}
+.maidenhead {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 2.1em;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  color: var(--green);
+}
+
 .log { height: 34vh; min-height: 220px; overflow-y: auto; background: #0b0e12; border: 1px solid var(--line);
   border-radius: .4rem; padding: .5rem; font: .85rem/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
 .log div { white-space: pre-wrap; word-break: break-word; }
