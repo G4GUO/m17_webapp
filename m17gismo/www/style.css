@@ -26,6 +26,10 @@ header h1 { font-size: 1.15rem; margin: 0; letter-spacing: .06em; color: var(--a
 .hdr-item .lbl { color: var(--dim); font-size: .75rem; text-transform: uppercase; }
 .hdr-item .val { font-weight: 600; }
 .link { margin-left: auto; padding: .15rem .6rem; border-radius: 1rem; font-size: .8rem; font-weight: 600; }
+.stale {
+  background: rgba(255,176,32,.15); color: var(--amber); border-bottom: 1px solid rgba(255,176,32,.45);
+  padding: .4rem .8rem; font-size: .85rem; text-align: center;
+}
 .link.on { background: rgba(62,207,142,.15); color: var(--green); }
 .link.off { background: rgba(255,92,92,.15); color: var(--red); }
 

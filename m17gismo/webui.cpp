@@ -49,6 +49,7 @@ static void send_refs(void);
 // ---------------------------------------------------------------------------
 // UI state mirrored for the browser
 // ---------------------------------------------------------------------------
+static int   m_refs_count;                   // reflectors found in M17Hosts.txt
 static int   m_port = DEFAULT_WEB_PORT;
 static char  m_www_dir[512] = "www";
 static void *m_srv;
@@ -309,6 +310,7 @@ static void build_state(char *out, int len) {
                      rpi_gpio_out_pin(), rpi_gpio_in_pin(), gerr);
     }
     o = json_add(out, len, o, ",\"clients\":%d", m_srv ? ws_client_count(m_srv) : 0);
+    o = json_add(out, len, o, ",\"refs\":%d", m_refs_count);
     o = json_add(out, len, o, ",\"rx_stream\":%lu", (unsigned long)(db->n_frames - m_frames_seen));
     o = json_add(out, len, o, ",\"uptime\":%ld}", (long)(now_ms() / 1000));
     out[o] = 0;
@@ -333,8 +335,13 @@ static void push_state(void) {
 // ---------------------------------------------------------------------------
 static void send_hello(int id) {
     if (!m_srv) return;
-    const char *hello = "{\"t\":\"hello\",\"app\":\"m17web\",\"proto\":1,"
-                        "\"audio_tag_mic\":1,\"audio_tag_spk\":2,\"rate\":8000}";
+#ifndef M17WEB_STAMP
+#define M17WEB_STAMP "unknown"
+#endif
+    char hello[256];
+    snprintf(hello, sizeof(hello),
+             "{\"t\":\"hello\",\"app\":\"m17web\",\"proto\":1,\"stamp\":\"%s\","
+             "\"audio_tag_mic\":1,\"audio_tag_spk\":2,\"rate\":8000}", M17WEB_STAMP);
     ws_send_text(m_srv, id, hello);
 
     // Help text
@@ -369,6 +376,11 @@ static void send_hello(int id) {
 static void web_on_open(const WsClientInfo *ci, void *user) {
     (void)user;
     log_send("info", "client connected: %s", ci->peer);
+    // Read the reflector list first: the greeting pushes the state, and that
+    // should already report how many reflectors were found.  Waiting for the page
+    // to ask for the list left the drop down empty whenever the answer arrived
+    // before the page was listening for it.
+    send_refs();
     send_hello(ci->id);
 }
 
@@ -453,6 +465,7 @@ static void run_command(const char *cmd_in) {
 static void send_refs(void) {
     if (!m_srv) return;
     char msg[8192];
+    int count = 0;
     int o = snprintf(msg, sizeof(msg), "{\"t\":\"refs\",\"names\":[");
     FILE *fp = fopen("M17Hosts.txt", "r");
     int first = 1;
@@ -472,6 +485,7 @@ static void send_refs(void) {
             const char *bare = (strncasecmp(name, "M17-", 4) == 0) ? "" : "M17-";
             o += snprintf(&msg[o], sizeof(msg) - o, "%s\"%s%s\"", first ? "" : ",", bare, name);
             first = 0;
+            m_refs_count = ++count;
         }
         fclose(fp);
     }

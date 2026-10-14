@@ -129,6 +129,13 @@ endif
 GPIOD ?= $(shell test -f /usr/include/gpiod.h && echo 1 || echo 0)
 CFLAGS   += -DHAVE_RPI_GPIO
 CXXFLAGS += -DHAVE_RPI_GPIO
+
+# A stamp for the web page: a browser tab left open across a rebuild keeps running
+# the old script, which then disagrees with the server (see the hello message in
+# webui.cpp).  Only changes when the code does.
+STAMP ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+CFLAGS   += -DM17WEB_STAMP='"$(STAMP)"'
+CXXFLAGS += -DM17WEB_STAMP='"$(STAMP)"' 
 ifeq ($(GPIOD),1)
 CFLAGS   += -DHAVE_GPIOD
 CXXFLAGS += -DHAVE_GPIOD

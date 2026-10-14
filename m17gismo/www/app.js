@@ -57,7 +57,8 @@ function handleJson(txt) {
     case 'resp': addLog('resp', m.line); break;
     case 'help': $('help').textContent = (m.lines || []).join('\n'); break;
     case 'clear': $('log').innerHTML = ''; break;
-    case 'refs': fillRefs(m.names || []); break;
+    case 'refs': fillRefs(m.names); break;
+    case 'hello': checkStamp(m.stamp); break;
     case 'hello': addLog('info', 'connected to ' + (m.app || 'm17web') + ' (protocol ' + m.proto + ')'); break;
   }
 }
@@ -320,20 +321,43 @@ function renderTxHealth(s) {
 // The reflector list is a datalist, so the field can be typed into as well as
 // picked from. Anything may be entered: m17_net.cpp matches the designator in
 // M17Hosts.txt with or without the leading "M17-".
-function fillRefs(names) {
-  const dl = $('reflist'), sel = $('refsel');
-  dl.innerHTML = '';
-  const keep = sel.value;
-  sel.innerHTML = '<option value="">&mdash; pick a reflector &mdash;</option>';
-  for (const n of names) {
-    const o = document.createElement('option');       // for typing
-    o.value = n;
-    dl.appendChild(o);
-    const s = document.createElement('option');       // for clicking
-    s.value = n; s.textContent = n;
-    sel.appendChild(s);
+// Fills both controls, tolerating a browser that has cached one asset and not
+// the other: if the picker is missing (an older index.html), the typing field is
+// still filled, and vice versa.
+// The station stamps its greeting with the build it is running.  If a later
+// greeting carries a different stamp, this tab is running an older page: say so
+// rather than letting the two disagree quietly (an old page once kept copying a
+// received callsign into the callsign box and transmitting with it).
+let seenStamp = null;
+
+function checkStamp(stamp) {
+  if (!stamp) return;
+  if (seenStamp && stamp !== seenStamp) {
+    const el = $('stale');
+    if (el) el.style.display = '';
   }
-  if (keep) sel.value = keep;
+  seenStamp = stamp;
+}
+
+function fillRefs(names) {
+  names = names || [];
+  const dl = $('reflist'), sel = $('refsel');
+  if (dl) dl.innerHTML = '';
+  const keep = sel ? sel.value : '';
+  if (sel) sel.innerHTML = '<option value="">&mdash; pick a reflector &mdash;</option>';
+  for (const n of names) {
+    if (dl) {
+      const o = document.createElement('option');     // for typing
+      o.value = n;
+      dl.appendChild(o);
+    }
+    if (sel) {
+      const s = document.createElement('option');     // for clicking
+      s.value = n; s.textContent = n;
+      sel.appendChild(s);
+    }
+  }
+  if (sel && keep) sel.value = keep;
 }
 
 // ---------------------------------------------------------------------------
@@ -418,9 +442,11 @@ function wire() {
   });
 
   // Picking from the list fills the name field, which is what connect sends
-  $('refsel').onchange = () => {
-    if ($('refsel').value) $('refname').value = $('refsel').value;
-  };
+  if ($('refsel')) {
+    $('refsel').onchange = () => {
+      if ($('refsel').value) $('refname').value = $('refsel').value;
+    };
+  }
 
   $('copygrid').onclick = () => {
     const t = $('grid').textContent.trim();
