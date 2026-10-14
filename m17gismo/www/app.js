@@ -120,6 +120,7 @@ function applyState(s) {
   renderPosition(s);
   renderCompass(s);
   renderHwPtt(s);
+  renderMode(s);
   $('simrow').style.display = (s.radio === 'sim') ? 'flex' : 'none';
 }
 
@@ -235,6 +236,29 @@ function renderPosition(s) {
 // The compass: a needle pointing at the bearing to the station being heard, and a
 // second small marker for the course that station reports.
 // Hardware PTT: the switch on the Pi's header, if the station has one
+// The mode: how the station is wired up.  Changing it takes effect at once -
+// the running mode's thread stands down and the new one starts.
+const MODE_NOTE = {
+  'radio':  'RF in, local audio out \u2014 the normal voice mode.',
+  'loop':   'audio is looped back inside the program, for practice with no radio.',
+  'gate':   'the radio is bridged to a reflector \u2014 connect to one in the Reflector panel.',
+  'client': 'local audio is bridged to a reflector \u2014 connect to one in the Reflector panel.',
+};
+
+function renderMode(s) {
+  const want = (s.mode || '').trim();
+  let known = false;
+  document.querySelectorAll('input[name=mode]').forEach((r) => {
+    if (r.value === want) {
+      known = true;
+      if (document.activeElement !== r) r.checked = true;
+    }
+  });
+  const note = $('modenote');
+  note.textContent = MODE_NOTE[want] || ('unknown mode: ' + want);
+  note.style.color = known ? 'var(--dim)' : 'var(--amber)';
+}
+
 function renderHwPtt(s) {
     const g = s.gpio || {}, el = $('hwinfo');
     if (!g.ok) {
@@ -380,6 +404,10 @@ function wire() {
 
   $('audioselect').onchange = (e) => cmd('audio ' + e.target.value);
   $('csvtick').onchange = (e) => cmd('csv ' + (e.target.checked ? 'on' : 'off'));
+
+  document.querySelectorAll('input[name=mode]').forEach((r) => {
+    r.onchange = () => { if (r.checked) cmd('mode ' + r.value); };
+  });
 
   $('copygrid').onclick = () => {
     const t = $('grid').textContent.trim();

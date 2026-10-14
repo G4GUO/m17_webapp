@@ -258,7 +258,8 @@ def build(path: str) -> None:
     m.table([
         ["Setting", "What it does"],
         ["RADIO=pluto", "Use the PlutoSDR. Use <b>RADIO=sim</b> instead to practise with no radio attached."],
-        ["MODE=radio", "Radio in, local sound out \u2014 the normal voice mode."],
+        ["MODE=radio", "Radio in, local sound out \u2014 the normal voice mode. It can also be changed "
+                       "while the program is running, from the Mode panel (section 8)."],
         ["-a alsa", "Send the voice to the Pi's sound card (see section 7). Use <b>-a browser</b> to "
                     "use the browser's own microphone and speakers instead."],
     ], [1.7, 6.3])
@@ -415,6 +416,23 @@ def build(path: str) -> None:
         ["help / clear log", "Lists every command in the log, or empties the log."],
     ], [1.9, 6.1])
 
+    m.h2("Mode")
+    m.p("How the station is wired up. <b>Radio</b> is the normal voice mode. <b>Loopback</b> feeds "
+        "your own audio straight back, for practice with no radio or aerial. <b>Gateway</b> and "
+        "<b>client</b> link the radio, or your audio, to a reflector over the internet.")
+    m.table([
+        ["Setting", "What it does"],
+        ["radio (normal)", "Radio in, sound out. Use this for contacts on a frequency."],
+        ["loopback (practice)", "Your own voice comes straight back, so you can check the microphone "
+                                "and the settings without transmitting."],
+        ["gateway", "The radio is bridged to a reflector: what you hear on frequency goes out to the "
+                    "reflector, and what comes back from the reflector goes out on frequency."],
+        ["client", "Your voice goes to the reflector over the internet, with no radio involved."],
+    ], [1.9, 6.1])
+    m.note("Changing the mode takes effect at once \u2014 you do not have to stop and start the "
+           "program. If you are transmitting when you change it, the transmission stops. The choice "
+           "is kept, so the same mode is still selected after a restart.")
+
     m.h2("Radio")
     m.p("The receive controls are stacked above the transmit ones.")
     m.table([
@@ -485,7 +503,8 @@ def build(path: str) -> None:
         ["conn NAME C", "Connect to a reflector, on module C."],
         ["disc", "Disconnect from the reflector."],
         ["mode radio", "Normal mode: radio in, sound out. Alternatives: <b>loop</b> (audio loops back for "
-                       "practice), <b>gate</b> (radio to reflector), <b>client</b> (sound to reflector)."],
+                       "practice), <b>gate</b> (radio to reflector), <b>client</b> (sound to reflector). "
+                       "Takes effect at once, and is kept for the next start."],
         ["audio alsa", "Voice through the Pi sound card. Alternatives: <b>browser</b>, <b>pulse</b>, "
                        "<b>both</b>, <b>none</b>."],
         ["lead 4", "Blank codec frames sent before the voice - see section 7."],

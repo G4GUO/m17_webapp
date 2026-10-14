@@ -38,6 +38,18 @@
     </div>
 
     <div class="card">
+      <h2>Mode</h2>
+      <div class="radio-stack">
+        <label class="chk"><input type="radio" name="mode" value="radio"> radio &mdash; normal</label>
+        <label class="chk"><input type="radio" name="mode" value="loop"> loopback &mdash; practice</label>
+        <label class="chk"><input type="radio" name="mode" value="gate"> gateway &mdash; radio to reflector</label>
+        <label class="chk"><input type="radio" name="mode" value="client"> client &mdash; audio to reflector</label>
+      </div>
+      <p class="note" id="modenote"></p>
+      <p class="note">Takes effect at once, and is kept for the next start.</p>
+    </div>
+
+    <div class="card">
       <h2>Radio</h2>
       <div class="radio-stack">
         <label>RX frequency (Hz)<input id="rxfreq" type="number" step="1" min="1"></label>

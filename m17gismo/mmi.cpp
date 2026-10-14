@@ -21,6 +21,43 @@ void pad_address(const char *ain, char *aout){
 		aout[i] = toupper(ain[i]);
 	}
 }
+// Keep the chosen mode for the next start.  config.txt holds the same commands
+// the console takes, one per line, so its "mode" line is replaced in place.
+// Writing a temporary file and renaming it means a failure part way through
+// cannot leave a half written config behind.
+static void save_mode_to_config(const char *mode){
+	char line[256];
+	const char *tmp = "config.txt.tmp";
+	FILE *in  = fopen("config.txt","r");
+	FILE *out = fopen(tmp,"w");
+	bool wrote = false;
+	if(out == NULL){
+		printf("m17web: cannot write config.txt, the mode will not be kept\n");
+		return;
+	}
+	if(in != NULL){
+		while(fgets(line, sizeof(line), in) != NULL){
+			char *p = line;
+			while(*p == ' ' || *p == '\t') p++;
+			if(strncmp(p,"mode",4) == 0 && (p[4] == ' ' || p[4] == '\t')){
+				if(wrote == false){
+					fprintf(out, "mode %s\n", mode);
+					wrote = true;
+				}
+				continue;                       // the old line is dropped
+			}
+			fputs(line, out);
+		}
+		fclose(in);
+	}
+	if(wrote == false) fprintf(out, "mode %s\n", mode);   // not there: add it
+	fclose(out);
+	if(rename(tmp, "config.txt") != 0)
+		printf("m17web: could not replace config.txt\n");
+	else
+		printf("m17web: mode %s kept for the next start\n", mode);
+}
+
 void mmi_parse(char *cmd){
 	int nt = 0;
 	bool valid = false;
@@ -221,35 +258,49 @@ void mmi_parse(char *cmd){
 		}
 	}
 
-	// These commands are only valid at startup
+	//   radio  - RF in, local audio out (the normal voice mode)
+	//   loop   - the audio is looped back inside the program, for practice
+	//   gate   - the radio is bridged to a reflector
+	//   client - local audio is bridged to a reflector
+	// A mode may be changed while running: the thread for the old mode stands
+	// down (see m17_txrx_mode_changed) and the dispatcher starts the new one.
+	// The choice is written to config.txt so it survives a restart.
 	if(strncmp(token[0],"mode",4) == 0 ){
-		gui_save_mode(token[1]);
+		CircuitType want = m17_db_get_chan_type();
+		bool known = true;
+		if(strncmp(token[1],"loop",4) == 0)        want = ASTOAS;
+		else if(strncmp(token[1],"radio",5) == 0)  want = DRTOAS;
+		else if(strncmp(token[1],"gate",4) == 0)   want = DRTODN;
+		else if(strncmp(token[1],"client",6) == 0) want = ASTODN;
+		else known = false;
 
-		if(strncmp(token[1],"loop",4) == 0 ){
-		    // Audio Loopback
-		    m17_db_set_chan_type(ASTOAS);
+		if(!known){
+			gui_cmd_resp("mode: radio, loop, gate or client");
 			valid = true;
-	    }
-	    if(strncmp(token[1],"radio",5) == 0 ){
-		    // Digital Radio to Local Audio
-		    // Microphone to Digital Radio
-		    m17_db_set_chan_type(DRTOAS);
+		} else {
+			bool was_net = (m17_db_get_chan_type() == DRTODN || m17_db_get_chan_type() == ASTODN);
+			bool is_net  = (want == DRTODN || want == ASTODN);
+			gui_save_mode(token[1]);
+
+			if(want != m17_db_get_chan_type()){
+				if(was_net && !is_net){
+					// Leaving a network mode: leave the reflector politely first
+					m17_net_disconnect_from_reflector();
+					m17_net_close();
+				}
+				m17_db_set_chan_type(want);
+				m17_txrx_mode_changed();
+				save_mode_to_config(token[1]);
+			}
+			if(is_net) m17_net_open();      // needed at startup and when entering
+
+			char text[80];
+			snprintf(text, sizeof(text), "mode %s", token[1]);
+			printf("m17web: %s\n", text);
+			fflush(stdout);
+			gui_cmd_resp(text);
 			valid = true;
-	    }
-	    if(strncmp(token[1],"gate",4) == 0 ){
-		    // RF Gateway
-		    m17_db_set_chan_type(DRTODN);
-	        // Open network
-	        m17_net_open();
-			valid = true;
-	    }
-	    if(strncmp(token[1],"client",6) == 0 ){
-		    // Audio Gateway
-		    m17_db_set_chan_type(ASTODN);
-	        // Open network
-	        m17_net_open();
-			valid = true;
-	    }
+		}
 	}
 
 	if(strncmp(token[0],"w",1)==0){

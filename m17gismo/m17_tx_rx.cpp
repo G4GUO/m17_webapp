@@ -22,6 +22,28 @@ static M17Type m_type;
 static uint8_t m_meta[14];
 // Set from other threads (mmi / web UI): volatile so loops actually re-read it
 static volatile bool m_running;
+
+// ---------------------------------------------------------------------------
+// Changing the mode while the program is running
+//
+// The dispatcher below (m17_txrx_threads) calls the thread for the current mode
+// synchronously, and those threads run until the program stops - which is why
+// the mode could only ever be chosen at startup.  Each thread now remembers the
+// mode generation it was started with and stops when it changes, so the
+// dispatcher picks up the new mode without a restart.  A mode change also
+// returns to receive: a transmission must not be carried across it.
+// ---------------------------------------------------------------------------
+static volatile int m_mode_gen;
+#define M17_MODE_OK(gen) (m_running == true && (gen) == m_mode_gen)
+
+int m17_txrx_mode_generation(void) {
+    return m_mode_gen;
+}
+
+void m17_txrx_mode_changed(void) {
+    m_ptt = PTT_RX;
+    m_mode_gen++;
+}
 static NetState m_net_state = STATE_RX;
 // Blank (silence) codec frames sent at the start of every transmission, see
 // m17_tx_lead_in().  Even numbers only: two codec frames make one M17 sub frame.
@@ -129,7 +151,8 @@ void *m17_txrx_net_thread(void *arg){
 	m_net_state = STATE_RX;
     radio_receive();
 
-    while(m_running == true){
+    const int gen = m_mode_gen;                 // the mode this thread started for
+    while(M17_MODE_OK(gen)){
 
     	if(m_net_state == STATE_RX){
 		    int len = radio_receive_samples( m_rsamples, N_SAMPLES );
@@ -181,8 +204,9 @@ void *m17_txrx_net_thread(void *arg){
 
 void *m17_txrx_thread(void *arg){
     uint8_t payload[16];
+    const int gen = m_mode_gen;                 // the mode this thread started for
 
-    while(m_running == true){
+    while(M17_MODE_OK(gen)){
         // Simplex transmit
 		if( m_ptt == PTT_TX){
 		    audio_mic_open();
@@ -204,7 +228,7 @@ void *m17_txrx_thread(void *arg){
 		    // is now stale: send live audio from here (see audio_input_flush).
 		    audio_input_flush();
 		    // Send sub frames of voice, 25 sub frames per sec
-		    while((m_ptt == PTT_TX)&&(m_running == true)){
+		    while((m_ptt == PTT_TX)&&M17_MODE_OK(gen)){
 #ifdef M17WEB_DIAG
 			    struct timespec d0, d1, d2, d3, d4;
 			    static long t_audio, t_encode, t_send, t_pow, t_total, n_sub;
@@ -277,7 +301,7 @@ void *m17_txrx_thread(void *arg){
 		    // is now stale: send live audio from here (see audio_input_flush).
 		    audio_input_flush();
 		    // Send sub frames of voice, 25 sub frames per sec
-		    while((m_ptt == PTT_DP)&&(m_running == true)){
+		    while((m_ptt == PTT_DP)&&M17_MODE_OK(gen)){
 			    // Read Audio samples and encode using Codec 2
 			    // Audio blocks are 20 ms but M17 chunks are 40 ms so 2 codec frames per m17 sub frame
 			    audio_input(m_amicsamples, m_nsam);
@@ -314,7 +338,7 @@ void *m17_txrx_thread(void *arg){
 		if( m_ptt == PTT_RX){
 		    radio_receive();
 		    audio_spk_open();
-			while((m_ptt == PTT_RX)&&(m_running == true)){
+			while((m_ptt == PTT_RX)&&M17_MODE_OK(gen)){
 			    // Re-open the audio paths if the web UI changed the backend
 			    if (audio_backend_pending()) {
 			        audio_spk_close();
@@ -333,7 +357,7 @@ void *m17_txrx_thread(void *arg){
 		    audio_spk_close();
 		    audio_mic_close();
 		    radio_transmit();
-			while((m_ptt == PTT_CA)&&(m_running == true)){
+			while((m_ptt == PTT_CA)&&M17_MODE_OK(gen)){
 			    m17_send_carrier();
 			}
 		}
@@ -344,8 +368,9 @@ void *m17_txrx_thread(void *arg){
 
 void *m17_txrx_client_thread(void *arg){
     uint8_t payload[16];
+    const int gen = m_mode_gen;                 // the mode this thread started for
 
-    while(m_running == true){
+    while(M17_MODE_OK(gen)){
         // Simplex transmit
 		if( m_ptt == PTT_TX){
 		    audio_mic_open();
@@ -356,7 +381,7 @@ void *m17_txrx_client_thread(void *arg){
 		    m17_tx_lead_in_to_net();
 		    audio_input_flush();
 		    // Send sub frames of voice, 25 sub frames per sec
-		    while((m_ptt == PTT_TX)&&(m_running == true)){
+		    while((m_ptt == PTT_TX)&&M17_MODE_OK(gen)){
 			    // Read Audio samples and encode using Codec 2
 			    // Audio blocks are 20 ms but M17 chunks are 40 ms so 2 codec frames per m17 sub frame
 			    audio_input(m_amicsamples, m_nsam);
@@ -375,7 +400,7 @@ void *m17_txrx_client_thread(void *arg){
         // Simplex receive
 		if( m_ptt == PTT_RX){
 		    audio_spk_open();
-			while((m_ptt == PTT_RX)&&(m_running == true)){
+			while((m_ptt == PTT_RX)&&M17_MODE_OK(gen)){
 				usleep(1000);
 			}
 		}
@@ -384,7 +409,8 @@ void *m17_txrx_client_thread(void *arg){
 }
 void *m17_txrx_audio_loopback(void *arg){
     uint8_t payload[16];
-    while(m_running == true){
+    const int gen = m_mode_gen;                 // the mode this thread started for
+    while(M17_MODE_OK(gen)){
         if (audio_backend_pending()) {
             audio_mic_close(); audio_mic_open();
             audio_spk_close(); audio_spk_open();
@@ -417,6 +443,9 @@ void *m17_txrx_threads(void *arg){
     	if(m17_db_get_chan_type() == ASTODN) m17_txrx_client_thread(NULL);
     	if(m17_db_get_chan_type() == DRTODN) m17_txrx_net_thread(NULL);
     	if(m17_db_get_chan_type() == ASTOAS) m17_txrx_audio_loopback(NULL);
+        // A thread can return because the mode changed underneath it, so pause
+        // briefly rather than spinning while the new mode starts.
+        usleep(20000);
     }
     // Close the system
     audio_spk_close();

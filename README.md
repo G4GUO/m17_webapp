@@ -354,6 +354,40 @@ pinctrl set 11 ip pu    # released again
 The interface shows the switch state under the push to talk button
 (`hardware PTT: GPIO 11 ready · keys GPIO 10`, red while pressed).
 
+## Modes, and changing them while running
+
+The mode is how the station is wired up:
+
+| Mode | Channel type | What it does |
+|------|--------------|--------------|
+| `radio` | DRTOAS | RF in, local audio out - the normal voice mode |
+| `loop` | ASTOAS | the audio is looped back inside the program, for practice with no radio |
+| `gate` | DRTODN | the radio is bridged to a reflector |
+| `client` | ASTODN | local audio is bridged to a reflector |
+
+Pick one in the **Mode** panel, or type `mode radio` (or `loop`, `gate`, `client`).
+The mode used to be settable only at startup: the dispatcher in `m17_tx_rx.cpp`
+calls the thread for the current mode *synchronously*, and those threads loop
+until the program stops, so they never returned and the channel type was never
+re-read - which is what the old "only valid at startup" comment described.  Each
+mode thread now remembers the mode generation it started for and checks it through
+`M17_MODE_OK`, so a change makes the running thread step aside cleanly, the
+dispatcher starts the new one, and the change takes effect within a frame or two
+with no restart.  A mode change also returns to receive, so a transmission cannot
+be carried across it, and leaving a network mode disconnects from the reflector
+politely first.
+
+The choice is written into `config.txt` (its `mode` line is replaced, via a
+temporary file and a rename, so a failure cannot leave a half-written config), so
+it survives a restart.  The state reports the live channel type rather than a
+saved string, which is what the panel's radio buttons highlight.
+
+Verified on the Pi: `loop` -> `radio` -> `gate` -> `client` -> `radio`, each
+taking effect while running with the same process throughout (no restart, no
+crash); an unknown mode answered with the list of valid ones; a mode change during
+a transmission returning to receive; and a transmit in radio mode afterwards still
+clean (`tx_drops=0`, `tx_overruns=0`).
+
 ## Connecting to a reflector
 
 The Reflector panel takes a name, a module letter and a connect button; the same

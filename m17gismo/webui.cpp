@@ -160,7 +160,9 @@ static int json_add(char *out, int len, int used, const char *fmt, ...) {
 static void build_state(char *out, int len) {
     const M17_Dbase *db = m17_get_db();
     char mode[24];
-    snprintf(mode, sizeof(mode), "%s", m_mode[0] ? m_mode : mode_name(db->chan_type));
+    // Always the live channel type: the mode can be changed while running now,
+    // so a saved string would go stale the moment it changed.
+    snprintf(mode, sizeof(mode), "%s", mode_name(db->chan_type));
     for (int i = 0; mode[i]; i++)
         if (mode[i] == '\n' || mode[i] == '\r' || mode[i] == '\t') mode[i] = ' ';
 

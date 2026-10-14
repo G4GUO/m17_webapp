@@ -412,6 +412,8 @@ void m17_txrx_set_type(M17Type type);
 void m17_txrx_set_meta(uint8_t *meta);
 void m17_txrx_spkr_audio( uint8_t *data );
 
+void m17_txrx_mode_changed(void);   // the mode changed: stand the running thread down
+int  m17_txrx_mode_generation(void);
 void m17_txrx_ptt_on(void);
 void m17_txrx_ptt_off(void);
 void m17_txrx_ptt_duplex(void);
