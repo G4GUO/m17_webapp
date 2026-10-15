@@ -23,15 +23,18 @@ void m17_db_set_rx_dst(  uint48_t dest ){
 }
 void m17_db_set_src( const char *add ){
 	m17_db.tx_src = m17_encode_call(add);
-	strcpy(m17_db.tx_src_add,add);
+	// Bounded: an un-terminated caller string must not run past the address
+	snprintf(m17_db.tx_src_add,sizeof(m17_db.tx_src_add),"%.9s",add);
 }
 void m17_db_set_gate( const char *add ){
 	m17_db.tx_gate = m17_encode_call(add);
-	strcpy(m17_db.tx_gate_add,add);
+	// Bounded: an un-terminated caller string must not run past the address
+	snprintf(m17_db.tx_gate_add,sizeof(m17_db.tx_gate_add),"%.9s",add);
 }
 void m17_db_set_dst( const char *add ){
 	m17_db.tx_dest = m17_encode_call(add);
-	strcpy(m17_db.tx_dest_add,add);
+	// Bounded: an un-terminated caller string must not run past the address
+	snprintf(m17_db.tx_dest_add,sizeof(m17_db.tx_dest_add),"%.9s",add);
 }
 void m17_db_set_brd( void ){
 	m17_db.tx_dest = 0xFFFFFFFFFFFF;

@@ -14,12 +14,21 @@ void help(void){
 // Pad a Null terminated address into a 9 character address
 //
 void pad_address(const char *ain, char *aout){
-	int n = strlen(ain);
-	if( n > 9 )
+	// Always fill the whole 9 characters and always terminate - the address is
+	// fixed width on air, space padded.  The original padded only when the name
+	// was LONGER than 9 (exactly backwards, the braces on the if were missing)
+	// and never wrote a terminator at all, so a short callsign left four
+	// uninitialised bytes of stack in the string.  That is what turned "G4GUO"
+	// into "G4GUORADI": the tail came from the "mode radio" line parsed moments
+	// earlier ("G4GUOGATE" when the mode was gate).  The bad address was then
+	// encoded and transmitted, not just displayed.
+	int n = (int)strlen(ain);
+	if( n > 9 ) n = 9;
 	memset(aout,' ',9);
 	for( int i = 0; i < n; i++){
 		aout[i] = toupper(ain[i]);
 	}
+	aout[9] = 0;
 }
 // Keep the chosen mode for the next start.  config.txt holds the same commands
 // the console takes, one per line, so its "mode" line is replaced in place.
@@ -189,7 +198,7 @@ void mmi_parse(char *cmd){
 
 	// Source Address
 	if(strncmp(token[0],"sa",2)==0){
-		char text[10];
+		char text[16];
 		pad_address(token[1], text);
 		m17_txrx_set_src_add(text);
 		valid = true;
@@ -197,7 +206,7 @@ void mmi_parse(char *cmd){
 
 	// Gateway address
 	if(strncmp(token[0],"ga",2)==0){
-		char text[10];
+		char text[16];
 		pad_address(token[1], text);
 		char c = token[2][0];
 		text[8] = c;
@@ -208,7 +217,7 @@ void mmi_parse(char *cmd){
 	// characters (space, A-Z, 0-9, - / .), so "#PARROT" cannot be encoded - and
 	// "PARROT" is what the reflector actually looks for.
 	if(strncmp(token[0],"da",2)==0){
-		char text[10];
+		char text[16];
 		const char *want = (token[1][0] == '#') ? token[1] + 1 : token[1];
 		pad_address(want, text);
 		m17_txrx_set_dest_add(text);
