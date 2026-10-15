@@ -458,7 +458,17 @@ function wire() {
   window.addEventListener('keydown', (e) => {
     if (e.code === 'Space' && !e.repeat && !isTyping(e.target)) down(e);
   });
-  window.addEventListener('keyup', (e) => { if (e.code === 'Space' && !isTyping(e.target)) up(e); });
+  // The release is deliberately NOT guarded by isTyping(): pressing space to
+  // transmit and then clicking into a text field (the callsign box) used to leave
+  // txHeld stuck true, and with txHeld true every pointerdown is ignored, so the
+  // button stopped working until the page was reloaded.  A release must always be
+  // honoured.
+  window.addEventListener('keyup', (e) => { if (e.code === 'Space') up(e); });
+  // ...and if the page loses focus mid-transmission, unkey rather than leaving
+  // the button latched.
+  window.addEventListener('blur', () => {
+    if (txHeld) { txHeld = false; btn.classList.remove('live'); cmd('rx'); }
+  });
 
   $('breakbtn').onclick = () => { txHeld = false; $('pttbtn').classList.remove('live'); cmd('b'); };
   $('carrierbtn').onclick = () => cmd('tc');
