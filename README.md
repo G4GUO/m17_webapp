@@ -48,12 +48,23 @@ Needs gcc/g++, make, **Codec2** built from source, and whichever of libiio
     sudo apt install libiio-dev limesuite liblimesuite-dev libpulse-dev
 
     cd m17_sdr_web/m17gismo
-    make                # everything that is available
+    make LIME=1 SIM=1 CODEC2_BACKEND=mod   # what the station runs
     make sim            # no SDR hardware, no PulseAudio: web UI + simulator
     make console        # legacy ncurses interface
 
 Build options: `PULSE=0 PLUTO=0 LIME=0 SIM=1 CONSOLE=1 WEB=0 EMBED=0 DEBUG=1`,
 `CODEC2_PREFIX=/usr/local`.
+
+**The defaults do not link on Debian.**  `SIM` defaults to 0 and
+`CODEC2_BACKEND` to `lib`, but `mmi.cpp` and `m17_tx_rx.cpp` reference `sim_*`
+and `codec2m_*` unconditionally, so a bare `make` fails with `undefined
+reference to sim_set_noise` / `codec2m_encode`.  And `LIME` is auto-detected
+from `LimeSuite.h` in one of three paths, none of which is where Debian's
+`liblimesuite-dev` actually installs it (`/usr/include/lime/*.h`), so the Lime
+back end is silently left out and `-r lime` becomes an option that cannot work.
+Hence the explicit line above.  Note `lime.cpp` includes the vendored
+`LimeSuite.h` from this directory, which is ABI-compatible with the packaged
+`libLimeSuite.so.23.11` - the link resolves cleanly.
 
 Codec2 itself (no cmake on Raspberry Pi OS by default):
 
@@ -686,7 +697,18 @@ Not done yet, in priority order:
    a systemd unit is the remaining step.  The program no longer dies when the
    Pluto is missing - it reports why and falls back to the simulator so the web
    UI stays usable.
-4. **LimeSDR** - still untested (none attached).
+4. **LimeSDR Mini** - now the station's radio, and the path is live: the board is
+   opened over LimeSuite (`LimeSDR Mini ... serial=1D394100534EFA`, 40 MHz
+   reference, `LNAW` on receive, `Band 2` on transmit, both chains calibrated,
+   48 kS/s = 10x the 4800 sym/s symbol rate to match `radio_get_oversample()`),
+   and the hardware PTT reads the **Pi's** GPIO 10/11 - `radio_keyed()` routes the
+   LIME case to `rpi_read_ptt()` exactly as PLUTO does, because only the
+   LimeSDR-USB has a GPIO header and a failed `LMS_GPIORead` on a Mini reads back
+   as permanently keyed.  On-air transmit and the parrot test are still to be
+   done (the antenna has to move to the Mini's SMA).  See the
+   `limesdr-limesuite-setup` skill for the LimeSuite-on-Debian trap: the `+dfsg`
+   package ships no gateware, so `LimeUtil --update` must run once or the board
+   looks dead.
 5. The web UI has been driven headlessly (curl + `wstest.py`) but not clicked
    through in a real browser.
 6. Reflector gateway mode (`mode gate`) has not been tested against a live
