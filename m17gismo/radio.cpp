@@ -148,7 +148,8 @@ void radio_transmit(void){
 #ifdef HAVE_LIME
 	if( m_radio_type == RADIO_TYPE_LIME ){
 	    lime_got_to_transmit();
-	    lime_ptt_tx(); // Use GPIO on lime
+	    // No lime_ptt_tx(): the Mini has no GPIO header.  The station's PTT
+	    // line is driven by rpi_tx() below, whichever radio is fitted.
 	}
 #endif
 #ifdef HAVE_PLUTO
@@ -167,7 +168,6 @@ void radio_receive(void){
 #ifdef HAVE_LIME
 	if( m_radio_type == RADIO_TYPE_LIME ){
 		lime_got_to_receive();
-        lime_ptt_rx();
 	}
 #endif
 #ifdef HAVE_PLUTO
@@ -186,7 +186,6 @@ void radio_duplex(void){
 #ifdef HAVE_LIME
 	if( m_radio_type == RADIO_TYPE_LIME ){
 		lime_got_to_duplex();
-	    lime_ptt_tx(); // Use GPIO on lime
 	}
 #endif
 #ifdef HAVE_PLUTO
@@ -211,7 +210,15 @@ bool radio_keyed(void){
 	if( m_radio_type == RADIO_TYPE_SIM ) return sim_is_keyed();
 #endif
 #ifdef HAVE_LIME
-	if( m_radio_type == RADIO_TYPE_LIME ) return lime_read_ptt();
+	// The Pi's GPIO, not the Lime's.  Only the LimeSDR-USB has a GPIO header:
+	// LMS_GPIORead on a Mini fails and leaves the readback at zero, which this
+	// would report as permanently keyed.  PTT in is the same pin either way.
+	if( m_radio_type == RADIO_TYPE_LIME ){
+#ifdef HAVE_RPI_GPIO
+		return rpi_read_ptt();
+#endif
+		return m_keyed;
+	}
 #endif
 #ifdef HAVE_RPI_GPIO
 	if( m_radio_type == RADIO_TYPE_PLUTO ) return rpi_read_ptt();  // Use GPIO on RPi
