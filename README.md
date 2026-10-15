@@ -386,7 +386,7 @@ sets it, so the audio appeared to work while nothing was audible.
 
 ```
 >> mixer
-PCM=202 Mic=0(mic) Auto Gain Control=202
+PCM=29 Mic=0(mic) Auto Gain Control=100
 ```
 
 `mixer <number> <percent>` sets one, by the number from that list (the names come

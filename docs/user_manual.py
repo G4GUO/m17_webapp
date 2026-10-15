@@ -388,6 +388,18 @@ def build(path: str) -> None:
     ], [2.0, 4.2, 1.8])
     m.p("A change takes effect at the start of your next transmission; the panel shows "
         "<b>(applying...)</b> until then.")
+    m.h2("The card's own controls: the Mixer panel")
+    m.p("A USB sound card has controls of its own \u2014 a volume, and often a microphone gain and "
+        "an automatic-gain switch. These are <b>not</b> the same as the application's volume: "
+        "they belong to the card, and one of them sitting in the wrong place is the usual reason "
+        "the audio looks healthy while nothing can actually be heard. A C-Media headset, for "
+        "instance, comes up at 29% (about -20 dB), which is quiet enough to lose received voice "
+        "completely.")
+    m.p("The <b>Mixer</b> panel lists whatever controls your card really has, and setting one "
+        "takes effect at once. Whatever you leave them at is remembered and applied again every "
+        "time the audio is opened \u2014 so a card that drops off USB and returns gets its levels "
+        "back with it, and a reboot does not undo them. The console does the same: <b>mixer</b> "
+        "lists the controls, and <b>mixer 0 100</b> sets one.")
     m.h2("If the browser refuses your microphone")
     m.p("Browsers only allow microphone access on a secure page. A page opened as "
         "<b>http://&lt;address&gt;:8080/</b> is not secure, so the microphone may be blocked. Either "
@@ -477,6 +489,7 @@ def build(path: str) -> None:
     m.table([
         ["Control", "What it does"],
         ["audio device", "Where your voice comes from and goes - see section 7."],
+        ["mixer", "The sound card's own volume and gain controls - see section 7."],
         ["blank frames before voice", "Silence sent before your speech at the start of a transmission. Default 4."],
         ["enable browser audio", "Must be pressed once (and permission given) before the browser can play or record audio."],
         ["volume / mute", "What you hear in the browser."],
@@ -513,6 +526,9 @@ def build(path: str) -> None:
                        "Takes effect at once, and is kept for the next start."],
         ["audio alsa", "Voice through the Pi sound card. Alternatives: <b>browser</b>, <b>pulse</b>, "
                        "<b>both</b>, <b>none</b>."],
+        ["mixer", "List the sound card's own controls and what they are set to - see section 7."],
+        ["mixer 0 100", "Set control number 0 to 100%. <b>on</b> and <b>off</b> also work, for a "
+                        "switch. Kept in config.txt for the next start."],
         ["lead 4", "Blank codec frames sent before the voice - see section 7."],
         ["gps", "Show the GPS receiver, the fix and your locator. <b>gps /dev/ttyACM1 38400</b> uses a "
                 "different receiver."],
