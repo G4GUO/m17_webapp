@@ -375,6 +375,37 @@ pinctrl set 11 ip pu    # released again
 The interface shows the switch state under the push to talk button
 (`hardware PTT: GPIO 11 ready · keys GPIO 10`, red while pressed).
 
+## The mixer: the card's own controls
+
+A USB sound card has its own hardware controls, and they are not the application's
+volumes.  A C-Media "USB Headphone Set" powers up at **29% (-20 dB)**, which is
+quiet enough to lose received audio completely - and nothing else on the station
+sets it, so the audio appeared to work while nothing was audible.
+
+`mixer` lists the card's controls with their current values:
+
+```
+>> mixer
+PCM=202 Mic=0(mic) Auto Gain Control=202
+```
+
+`mixer <number> <percent>` sets one, by the number from that list (the names come
+from the card and may contain spaces, which a command line cannot carry):
+
+```
+>> mixer 0 100          # PCM to full
+>> mixer 1 60           # the microphone gain (this one is capture)
+>> mixer 2 off          # a switch, e.g. Auto Gain Control
+```
+
+The setting is written to `config.txt` like the other settings, so it is applied
+again at the next start - and the program also re-applies it every time it opens
+the audio, so a card that drops off USB and comes back gets its levels back with
+it.  The **Mixer** panel in the web UI does the same thing with sliders.
+
+This is what makes `amixer`, `alsactl store` and an `ExecStartPre=` line in the
+unit unnecessary: the levels belong to the application that is using the card.
+
 ## Modes, and changing them while running
 
 The mode is how the station is wired up:

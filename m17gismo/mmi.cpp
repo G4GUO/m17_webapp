@@ -358,6 +358,61 @@ void mmi_parse(char *cmd){
 		}
 	}
 
+	// The sound card's own hardware controls: "mixer" lists them, and
+	// "mixer PCM 100" sets one.  The value is a percentage of whatever that
+	// control allows, so one command works for any card.  It is written to
+	// config.txt like the other settings, which also means it is applied again
+	// at the next start - and the app re-applies it whenever it opens the
+	// audio, so a card that drops off USB and returns gets it back.
+	if(strncmp(token[0],"mixer",5)==0){
+		int n = audio_alsa_mixer_count();
+		if(nt == 1){
+			char list[256];
+			int used = 0;
+			if(n == 0){
+				snprintf(list, sizeof(list), "no sound card");
+			}
+			for(int i = 0; i < n && used < (int)sizeof(list) - 24; i++){
+				used += snprintf(list + used, sizeof(list) - (size_t)used, "%s%s=%d%s",
+					i ? " " : "", audio_alsa_mixer_name(i), audio_alsa_mixer_pct(i),
+					audio_alsa_mixer_is_capture(i) ? "(mic)" : "");
+			}
+			gui_cmd_resp(list);
+			valid = true;
+		}
+		if(nt == 3){
+			int pct = atoi(token[2]);
+			if(strncmp(token[2],"on",2) == 0)  pct = 100;
+			if(strncmp(token[2],"off",3) == 0) pct = 0;
+			// The number from "mixer" (names may contain spaces, which the
+			// command line cannot carry).  A spaceless name is accepted too.
+			int idx = -1;
+			bool numeric = (token[1][0] != 0);
+			for(const char *p = token[1]; *p; p++)
+				if(*p < '0' || *p > '9') numeric = false;
+			if(numeric){
+				idx = atoi(token[1]);
+			} else {
+				for(int i = 0; i < n; i++)
+					if(strcmp(audio_alsa_mixer_name(i), token[1]) == 0) idx = i;
+			}
+			if(idx < 0 || idx >= n){
+				gui_cmd_resp("no such control");
+			} else {
+				if(audio_alsa_mixer_set(audio_alsa_mixer_name(idx), pct)){
+					char line[64];
+					snprintf(line, sizeof(line), "mixer %d %d", idx, pct);
+					char key[48];
+					snprintf(key, sizeof(key), "mixer %d", idx);
+					save_line_to_config(key, line);
+					valid = true;
+				} else {
+					gui_cmd_resp("the card refused that setting");
+				}
+			}
+		}
+	}
+
 	// Listen to all addresses (not just ours and the broadcast address)
 	if(strncmp(token[0],"la",2)==0){
 		if(nt == 2){

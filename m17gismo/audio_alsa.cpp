@@ -39,6 +39,7 @@ static char m_error[160];
 static int m_error_stream;   // 1 = microphone, 2 = speaker: what m_error refers to
 static struct timespec m_last_read;      // when the transmitter last asked for audio
 static bool m_have_read;
+static bool m_ctl_valid;    // the card's mixer controls have been read (see below)
 static long m_overruns;     // capture overruns: microphone audio the card discarded
 static long m_starved;      // capture samples lost (ring overflow, or padded silence)
 
@@ -73,10 +74,34 @@ long audio_alsa_starved(void)  { return m_starved; }
 // two can disagree if an attempt failed after a stream had already opened.
 bool audio_alsa_mic_is_open(void) { return m_in != NULL; }
 bool audio_alsa_spk_is_open(void) { return m_out != NULL; }
-const char *audio_alsa_device(void) { return m_used_in[0] ? m_used_in : m_requested; }
+const char *audio_alsa_device(void) {
+    if (m_used_in[0]) return m_used_in;
+    if (m_requested[0]) return m_requested;
+    const char *env = getenv("M17WEB_ALSA_DEVICE");
+    return (env && env[0]) ? env : "";
+}
 
 void audio_alsa_set_device(const char *dev) {
     snprintf(m_requested, sizeof(m_requested), "%s", dev ? dev : "");
+    m_ctl_valid = false;   // a different card has different controls
+}
+
+// The first USB/PnP card: usually the one that was plugged in, and never HDMI.
+// Both the PCM device and the card's mixer controls have to agree on this.
+static int pick_usb_card(void) {
+    char best[64] = "";
+    int card = -1, found = -1;
+    while (snd_card_next(&card) == 0 && card >= 0) {
+        char *nm = NULL;
+        if (snd_card_get_longname(card, &nm) == 0 && nm) {
+            if (strcasestr(nm, "USB") || strcasestr(nm, "PnP")) {
+                snprintf(best, sizeof(best), "plughw:%d,0", card);
+                found = card;
+            }
+            free(nm);
+        }
+    }
+    return found;
 }
 
 // Pick something sane when the user has not said which device to use.
@@ -84,18 +109,189 @@ static void resolve_device(char *out, size_t n) {
     if (m_requested[0]) { snprintf(out, n, "%s", m_requested); return; }
     const char *env = getenv("M17WEB_ALSA_DEVICE");
     if (env && env[0]) { snprintf(out, n, "%s", env); return; }
+    int card = pick_usb_card();
+    if (card >= 0) { snprintf(out, n, "plughw:%d,0", card); return; }
+    snprintf(out, n, "sysdefault");
+}
 
-    char best[64] = "";
-    int card = -1;
-    while (snd_card_next(&card) == 0 && card >= 0) {
-        char *nm = NULL;
-        if (snd_card_get_longname(card, &nm) == 0 && nm) {
-            if (strcasestr(nm, "USB") || strcasestr(nm, "PnP"))
-                snprintf(best, sizeof(best), "plughw:%d,0", card);
-            free(nm);
+//
+// The card's own hardware controls, as opposed to the volumes the application
+// keeps for itself.  It matters because a USB card powers up with whatever its
+// controls happen to say - the C-Media headset starts at 29% (-20 dB), which is
+// quiet enough to lose received audio entirely - and nothing else on the
+// station sets them.  These belong to the card rather than to a stream, so they
+// can be set while playback is open.
+//
+// The values asked for are remembered and re-applied every time the audio is
+// opened, so a card that comes back after a USB glitch gets them again.
+//
+#define MIXER_MAX   8
+#define MIXER_NAMEL 24
+
+#define MIXER_KIND_NONE    0
+#define MIXER_KIND_PLAY    1
+#define MIXER_KIND_CAPTURE 2
+
+typedef struct {
+    char name[MIXER_NAMEL];
+    int  kind;              // playback or capture
+    bool has_switch, on;
+    long min, max, value;
+} MixerCtl;
+
+static MixerCtl m_ctl[MIXER_MAX];
+static int       m_ctl_n;
+
+static char m_want_name[MIXER_MAX][MIXER_NAMEL];
+static int  m_want_pct[MIXER_MAX];
+static int  m_want_n;
+
+static snd_mixer_t *open_mixer(void) {
+    int card = pick_usb_card();
+    if (card < 0) return NULL;
+    char dev[32];
+    snprintf(dev, sizeof(dev), "hw:%d", card);
+    snd_mixer_t *m = NULL;
+    if (snd_mixer_open(&m, 0) < 0) return NULL;
+    if (snd_mixer_attach(m, dev) < 0 ||
+        snd_mixer_selem_register(m, NULL, NULL) < 0 ||
+        snd_mixer_load(m) < 0) {
+        snd_mixer_close(m);
+        return NULL;
+    }
+    return m;
+}
+
+// Read the card's controls.  Names come from the card itself, which is what
+// makes this work for whatever is plugged in rather than a fixed list.
+static void refresh_mixer(void) {
+    m_ctl_n = 0;
+    snd_mixer_t *m = open_mixer();
+    if (!m) return;
+    for (snd_mixer_elem_t *e = snd_mixer_first_elem(m);
+         e && m_ctl_n < MIXER_MAX; e = snd_mixer_elem_next(e)) {
+        if (!snd_mixer_selem_is_active(e)) continue;
+        const char *nm = snd_mixer_selem_get_name(e);
+        if (!nm || !nm[0]) continue;
+        MixerCtl *c = &m_ctl[m_ctl_n];
+        memset(c, 0, sizeof(*c));
+        snprintf(c->name, sizeof(c->name), "%s", nm);
+        c->has_switch = false;
+        c->on = true;
+        if (snd_mixer_selem_has_playback_volume(e)) {
+            c->kind = MIXER_KIND_PLAY;
+            snd_mixer_selem_get_playback_volume_range(e, &c->min, &c->max);
+            snd_mixer_selem_get_playback_volume(e, SND_MIXER_SCHN_FRONT_LEFT, &c->value);
+            if (snd_mixer_selem_has_playback_switch(e)) {
+                int v = 1;
+                c->has_switch = true;
+                if (snd_mixer_selem_get_playback_switch(e, SND_MIXER_SCHN_FRONT_LEFT, &v) == 0)
+                    c->on = (v != 0);
+            }
+        } else if (snd_mixer_selem_has_capture_volume(e)) {
+            c->kind = MIXER_KIND_CAPTURE;
+            snd_mixer_selem_get_capture_volume_range(e, &c->min, &c->max);
+            snd_mixer_selem_get_capture_volume(e, SND_MIXER_SCHN_FRONT_LEFT, &c->value);
+            if (snd_mixer_selem_has_capture_switch(e)) {
+                int v = 1;
+                c->has_switch = true;
+                if (snd_mixer_selem_get_capture_switch(e, SND_MIXER_SCHN_FRONT_LEFT, &v) == 0)
+                    c->on = (v != 0);
+            }
+        } else {
+            // A switch with no level (the card's Auto Gain Control).
+            c->kind = MIXER_KIND_PLAY;
+            c->min = 0; c->max = 100; c->value = 100;
+            if (snd_mixer_selem_has_playback_switch(e)) {
+                int v = 1;
+                c->has_switch = true;
+                if (snd_mixer_selem_get_playback_switch(e, SND_MIXER_SCHN_FRONT_LEFT, &v) == 0)
+                    c->on = (v != 0);
+            }
+        }
+        m_ctl_n++;
+    }
+    snd_mixer_close(m);
+}
+
+static void mixer_ctl_refresh_if_needed(void) {
+    if (!m_ctl_valid) { refresh_mixer(); m_ctl_valid = true; }
+}
+
+int  audio_alsa_mixer_count(void) { mixer_ctl_refresh_if_needed(); return m_ctl_n; }
+
+const char *audio_alsa_mixer_name(int i) {
+    mixer_ctl_refresh_if_needed();
+    return (i >= 0 && i < m_ctl_n) ? m_ctl[i].name : "";
+}
+// Current level as a percentage of what the control allows, so the UI can use
+// one slider shape for every card.
+int audio_alsa_mixer_pct(int i) {
+    mixer_ctl_refresh_if_needed();
+    if (i < 0 || i >= m_ctl_n) return 0;
+    MixerCtl *c = &m_ctl[i];
+    if (c->max <= c->min) return c->value > 0 ? 100 : 0;
+    return (int)((c->value - c->min) * 100 / (c->max - c->min));
+}
+bool audio_alsa_mixer_has_switch(int i) {
+    mixer_ctl_refresh_if_needed();
+    return (i >= 0 && i < m_ctl_n) && m_ctl[i].has_switch;
+}
+bool audio_alsa_mixer_on(int i) {
+    mixer_ctl_refresh_if_needed();
+    return (i >= 0 && i < m_ctl_n) ? m_ctl[i].on : false;
+}
+bool audio_alsa_mixer_is_capture(int i) {
+    mixer_ctl_refresh_if_needed();
+    return (i >= 0 && i < m_ctl_n) && m_ctl[i].kind == MIXER_KIND_CAPTURE;
+}
+
+// Set a control, by the name it reported, to a percentage.
+bool audio_alsa_mixer_set(const char *name, int pct) {
+    if (!name || !name[0]) return false;
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    snd_mixer_t *m = open_mixer();
+    if (!m) return false;
+    bool done = false;
+    for (snd_mixer_elem_t *e = snd_mixer_first_elem(m); e && !done; e = snd_mixer_elem_next(e)) {
+        const char *nm = snd_mixer_selem_get_name(e);
+        if (!nm || strcmp(nm, name) != 0) continue;
+        long min = 0, max = 0;
+        if (snd_mixer_selem_has_playback_volume(e)) {
+            snd_mixer_selem_get_playback_volume_range(e, &min, &max);
+            snd_mixer_selem_set_playback_volume_all(e, min + (max - min) * pct / 100);
+            if (snd_mixer_selem_has_playback_switch(e))
+                snd_mixer_selem_set_playback_switch_all(e, pct > 0);
+            done = true;
+        } else if (snd_mixer_selem_has_capture_volume(e)) {
+            snd_mixer_selem_get_capture_volume_range(e, &min, &max);
+            snd_mixer_selem_set_capture_volume_all(e, min + (max - min) * pct / 100);
+            if (snd_mixer_selem_has_capture_switch(e))
+                snd_mixer_selem_set_capture_switch_all(e, pct > 0);
+            done = true;
         }
     }
-    snprintf(out, n, "%s", best[0] ? best : "sysdefault");
+    if (m) snd_mixer_close(m);
+    if (!done) return false;
+    // Remember it, so it is applied again whenever the audio is opened: the
+    // card can vanish and come back, and the settings would otherwise be lost.
+    for (int i = 0; i < m_want_n; i++) {
+        if (strcmp(m_want_name[i], name) == 0) { m_want_pct[i] = pct; m_ctl_valid = false; return true; }
+    }
+    if (m_want_n < MIXER_MAX) {
+        snprintf(m_want_name[m_want_n], MIXER_NAMEL, "%s", name);
+        m_want_pct[m_want_n] = pct;
+        m_want_n++;
+    }
+    m_ctl_valid = false;   // re-read, so the state shows what really landed
+    return true;
+}
+
+// Called when the audio paths open.  Silently does nothing if there is no card.
+void audio_alsa_mixer_apply(void) {
+    if (m_want_n == 0) return;
+    for (int i = 0; i < m_want_n; i++) audio_alsa_mixer_set(m_want_name[i], m_want_pct[i]);
 }
 
 static bool open_pcm(snd_pcm_t **pcm, const char *dev, snd_pcm_stream_t dir, const char *what) {
@@ -239,6 +435,7 @@ void audio_alsa_mic_open(void) {
     resolve_device(dev, sizeof(dev));
     if (open_pcm(&m_in, dev, SND_PCM_STREAM_CAPTURE, "microphone")) {
         snprintf(m_used_in, sizeof(m_used_in), "%s", dev);
+        audio_alsa_mixer_apply();
         pthread_mutex_lock(&m_cap_mtx);
         m_cap_head = m_cap_tail = m_cap_count = 0;
         pthread_mutex_unlock(&m_cap_mtx);
@@ -264,6 +461,8 @@ void audio_alsa_spk_open(void) {
     resolve_device(dev, sizeof(dev));
     if (open_pcm(&m_out, dev, SND_PCM_STREAM_PLAYBACK, "speaker")) {
         snprintf(m_used_out, sizeof(m_used_out), "%s", dev);
+        // The card powers up with its own idea of the levels; put them back.
+        audio_alsa_mixer_apply();
         // Prefill with silence: starting playback on an empty buffer guarantees
         // an immediate underrun (XRUN) on the first write.
         int16_t silence[160];

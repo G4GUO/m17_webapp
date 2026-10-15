@@ -124,6 +124,7 @@ function applyState(s) {
   renderCompass(s);
   renderHwPtt(s);
   renderMode(s);
+  renderMixer(s);
   $('simrow').style.display = (s.radio === 'sim') ? 'flex' : 'none';
 }
 
@@ -178,6 +179,64 @@ function renderAudioStatus(s) {
     el.style.color = audioReady ? 'var(--green)' : 'var(--dim)';
     pend.textContent = '';
   }
+}
+
+// The sound card's own hardware controls.  The names come from the card, so the
+// panel shows whatever is really there.  The controls are only rebuilt when the
+// set of them changes, and a value is not written back while its own slider has
+// focus - the state stream runs continuously and would fight a drag.
+let mixerSig = '';
+function renderMixer(s) {
+  const ctls = s.mixer || [];
+  const box = $('mixerctls');
+  const sig = ctls.map(c => c.name + (c.mic ? 'm' : 'p') + (c.sw ? 's' : '')).join('|');
+  if (sig !== mixerSig) {
+    mixerSig = sig;
+    box.innerHTML = '';
+    ctls.forEach((c, i) => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      const lab = document.createElement('label');
+      lab.appendChild(document.createTextNode(c.name + (c.mic ? ' (mic)' : '') + ' '));
+      const sl = document.createElement('input');
+      sl.type = 'range'; sl.min = '0'; sl.max = '100'; sl.step = '1'; sl.value = c.pct;
+      sl.dataset.i = i;
+      const out = document.createElement('output');
+      out.textContent = c.pct;
+      sl.oninput = () => { out.textContent = sl.value; };
+      sl.onchange = () => cmd('mixer ' + i + ' ' + sl.value);
+      lab.appendChild(sl);
+      lab.appendChild(out);
+      row.appendChild(lab);
+      if (c.sw) {
+        const sw = document.createElement('label');
+        sw.className = 'chk';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.checked = c.on; cb.dataset.i = i;
+        cb.onchange = () => cmd('mixer ' + i + ' ' + (cb.checked ? '100' : '0'));
+        sw.appendChild(cb);
+        sw.appendChild(document.createTextNode(' on'));
+        row.appendChild(sw);
+      }
+      box.appendChild(row);
+    });
+  } else {
+    box.querySelectorAll('input[type=range]').forEach(el => {
+      const c = ctls[Number(el.dataset.i)];
+      if (!c || document.activeElement === el) return;
+      el.value = c.pct;
+      const o = el.parentNode.querySelector('output');
+      if (o) o.textContent = c.pct;
+    });
+    box.querySelectorAll('input[type=checkbox]').forEach(el => {
+      const c = ctls[Number(el.dataset.i)];
+      if (c && document.activeElement !== el) el.checked = c.on;
+    });
+  }
+  $('mixerbadge').textContent = ctls.length ? (ctls.length + (ctls.length === 1 ? ' control' : ' controls')) : 'no card';
+  $('mixernote').textContent = ctls.length
+    ? "The card's own levels, saved in config.txt and re-applied whenever the audio opens."
+    : 'No sound card controls: no card attached, or the audio is set to the browser.';
 }
 
 // Transmit health: blank frames sent before the voice, and how much microphone

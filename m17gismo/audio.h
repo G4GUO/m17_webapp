@@ -84,6 +84,18 @@ bool audio_alsa_spk_is_open(void);
 const char *audio_alsa_error(void);
 const char *audio_alsa_device(void);
 void audio_alsa_set_device(const char *dev);
+// The card's own hardware mixer controls.  Names come from the card, so this
+// works for whatever is plugged in; values are percentages of what the control
+// allows, which gives the UI one slider shape for every card.  Setting one
+// remembers it, and it is re-applied whenever the audio is opened.
+int  audio_alsa_mixer_count(void);
+const char *audio_alsa_mixer_name(int i);
+int  audio_alsa_mixer_pct(int i);
+bool audio_alsa_mixer_has_switch(int i);
+bool audio_alsa_mixer_on(int i);
+bool audio_alsa_mixer_is_capture(int i);
+bool audio_alsa_mixer_set(const char *name, int pct);
+void audio_alsa_mixer_apply(void);
 
 // ---- PulseAudio back end (audio_pulse.cpp, needs -lpulse-simple) -----------
 void audio_pulse_mic_open(void);

@@ -253,6 +253,28 @@ static void build_state(char *out, int len) {
         audio_local_streams(&mic, &spk);
         o = json_add(out, len, o, ",\"mic_open\":%s,\"spk_open\":%s",
                      mic ? "true" : "false", spk ? "true" : "false");
+        // The card's own controls, so the mixer panel can show what is really
+        // set rather than what was last asked for.  Names come from the card;
+        // anything outside a safe set is replaced, so the JSON cannot break.
+        o = json_add(out, len, o, ",\"mixer\":[");
+        int nn = audio_alsa_mixer_count();
+        for (int i = 0; i < nn; i++) {
+            char safe[32];
+            size_t k = 0;
+            for (const char *p = audio_alsa_mixer_name(i); *p && k < sizeof(safe) - 1; p++) {
+                char ch = *p;
+                bool ok = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+                          (ch >= '0' && ch <= '9') || ch == ' ' || ch == '-' || ch == '_';
+                safe[k++] = ok ? ch : '_';
+            }
+            safe[k] = 0;
+            o = json_add(out, len, o, "%s{\"name\":\"%s\",\"pct\":%d,\"sw\":%s,\"on\":%s,\"mic\":%s}",
+                         i ? "," : "", safe, audio_alsa_mixer_pct(i),
+                         audio_alsa_mixer_has_switch(i) ? "true" : "false",
+                         audio_alsa_mixer_on(i) ? "true" : "false",
+                         audio_alsa_mixer_is_capture(i) ? "true" : "false");
+        }
+        o = json_add(out, len, o, "]");
     }
     {
         // Position: the fix, its age, and the Maidenhead locator for the UI
