@@ -403,6 +403,12 @@ again at the next start - and the program also re-applies it every time it opens
 the audio, so a card that drops off USB and comes back gets its levels back with
 it.  The **Mixer** panel in the web UI does the same thing with sliders.
 
+A control that carries **both** a playback side and a capture side - a `Mic` with
+a monitor level, which the USB PnP card has - is treated as the microphone's:
+reading it shows the capture gain, and setting it moves the gain rather than the
+monitor level.  Testing playback first reported 0% for that microphone and set
+the wrong side.
+
 This is what makes `amixer`, `alsactl store` and an `ExecStartPre=` line in the
 unit unnecessary: the levels belong to the application that is using the card.
 

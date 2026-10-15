@@ -178,17 +178,12 @@ static void refresh_mixer(void) {
         snprintf(c->name, sizeof(c->name), "%s", nm);
         c->has_switch = false;
         c->on = true;
-        if (snd_mixer_selem_has_playback_volume(e)) {
-            c->kind = MIXER_KIND_PLAY;
-            snd_mixer_selem_get_playback_volume_range(e, &c->min, &c->max);
-            snd_mixer_selem_get_playback_volume(e, SND_MIXER_SCHN_FRONT_LEFT, &c->value);
-            if (snd_mixer_selem_has_playback_switch(e)) {
-                int v = 1;
-                c->has_switch = true;
-                if (snd_mixer_selem_get_playback_switch(e, SND_MIXER_SCHN_FRONT_LEFT, &v) == 0)
-                    c->on = (v != 0);
-            }
-        } else if (snd_mixer_selem_has_capture_volume(e)) {
+        // Capture is tested first on purpose: a control can carry both a
+        // playback (monitor) side and a capture side - the USB PnP card's 'Mic'
+        // does - and a control named for the microphone is there for the
+        // microphone.  Reading the playback side reported 0% and, worse, setting
+        // it moved the monitor level instead of the microphone gain.
+        if (snd_mixer_selem_has_capture_volume(e)) {
             c->kind = MIXER_KIND_CAPTURE;
             snd_mixer_selem_get_capture_volume_range(e, &c->min, &c->max);
             snd_mixer_selem_get_capture_volume(e, SND_MIXER_SCHN_FRONT_LEFT, &c->value);
@@ -196,6 +191,16 @@ static void refresh_mixer(void) {
                 int v = 1;
                 c->has_switch = true;
                 if (snd_mixer_selem_get_capture_switch(e, SND_MIXER_SCHN_FRONT_LEFT, &v) == 0)
+                    c->on = (v != 0);
+            }
+        } else if (snd_mixer_selem_has_playback_volume(e)) {
+            c->kind = MIXER_KIND_PLAY;
+            snd_mixer_selem_get_playback_volume_range(e, &c->min, &c->max);
+            snd_mixer_selem_get_playback_volume(e, SND_MIXER_SCHN_FRONT_LEFT, &c->value);
+            if (snd_mixer_selem_has_playback_switch(e)) {
+                int v = 1;
+                c->has_switch = true;
+                if (snd_mixer_selem_get_playback_switch(e, SND_MIXER_SCHN_FRONT_LEFT, &v) == 0)
                     c->on = (v != 0);
             }
         } else {
@@ -258,17 +263,19 @@ bool audio_alsa_mixer_set(const char *name, int pct) {
         const char *nm = snd_mixer_selem_get_name(e);
         if (!nm || strcmp(nm, name) != 0) continue;
         long min = 0, max = 0;
-        if (snd_mixer_selem_has_playback_volume(e)) {
-            snd_mixer_selem_get_playback_volume_range(e, &min, &max);
-            snd_mixer_selem_set_playback_volume_all(e, min + (max - min) * pct / 100);
-            if (snd_mixer_selem_has_playback_switch(e))
-                snd_mixer_selem_set_playback_switch_all(e, pct > 0);
-            done = true;
-        } else if (snd_mixer_selem_has_capture_volume(e)) {
+        // Same preference as the read: capture first, so a 'Mic' control with
+        // both sides moves the microphone gain rather than a monitor level.
+        if (snd_mixer_selem_has_capture_volume(e)) {
             snd_mixer_selem_get_capture_volume_range(e, &min, &max);
             snd_mixer_selem_set_capture_volume_all(e, min + (max - min) * pct / 100);
             if (snd_mixer_selem_has_capture_switch(e))
                 snd_mixer_selem_set_capture_switch_all(e, pct > 0);
+            done = true;
+        } else if (snd_mixer_selem_has_playback_volume(e)) {
+            snd_mixer_selem_get_playback_volume_range(e, &min, &max);
+            snd_mixer_selem_set_playback_volume_all(e, min + (max - min) * pct / 100);
+            if (snd_mixer_selem_has_playback_switch(e))
+                snd_mixer_selem_set_playback_switch_all(e, pct > 0);
             done = true;
         }
     }
