@@ -32,7 +32,8 @@
 
 static snd_pcm_t *m_out;
 static snd_pcm_t *m_in;
-static char m_requested[128];
+static char m_requested[128];      // playback device
+static char m_requested_cap[128];  // capture device, "" = same as playback
 static char m_used_in[128];
 static char m_used_out[128];
 static char m_error[160];
@@ -42,6 +43,10 @@ static bool m_have_read;
 static bool m_ctl_valid;    // the card's mixer controls have been read (see below)
 static long m_overruns;     // capture overruns: microphone audio the card discarded
 static long m_starved;      // capture samples lost (ring overflow, or padded silence)
+
+// Defined with the device selection below, but the setters above need them.
+static void resolve_auto_device(char *out, size_t n);
+static void resolve_device(char *out, size_t n, bool capture);
 
 //
 // Capture runs on its own thread into this ring.  The transmit loop only comes
@@ -74,16 +79,50 @@ long audio_alsa_starved(void)  { return m_starved; }
 // two can disagree if an attempt failed after a stream had already opened.
 bool audio_alsa_mic_is_open(void) { return m_in != NULL; }
 bool audio_alsa_spk_is_open(void) { return m_out != NULL; }
+// The playback device, which is the one worth showing: a Bluetooth speaker
+// takes the output while the microphone stays on the sound card.
 const char *audio_alsa_device(void) {
-    if (m_used_in[0]) return m_used_in;
+    if (m_used_out[0]) return m_used_out;
     if (m_requested[0]) return m_requested;
     const char *env = getenv("M17WEB_ALSA_DEVICE");
     return (env && env[0]) ? env : "";
 }
 
+const char *audio_alsa_capture_device(void) {
+    if (m_used_in[0]) return m_used_in;
+    if (m_requested_cap[0]) return m_requested_cap;
+    return audio_alsa_device();
+}
+
+// A device re-selected while it is already open is not a change.  It matters:
+// closing and re-opening a Bluetooth PCM in the same breath upsets bluealsa
+// ("Device or resource busy"), and the station would fall back to the card for
+// no reason at all.
+bool audio_alsa_device_changed(void) {
+    char out[128], cap[128];
+    resolve_device(out, sizeof(out), false);
+    resolve_device(cap, sizeof(cap), true);
+    if (m_out != NULL && m_used_out[0] && strcmp(m_used_out, out) != 0) return true;
+    if (m_in  != NULL && m_used_in[0]  && strcmp(m_used_in,  cap) != 0) return true;
+    return false;
+}
+
 void audio_alsa_set_device(const char *dev) {
     snprintf(m_requested, sizeof(m_requested), "%s", dev ? dev : "");
     m_ctl_valid = false;   // a different card has different controls
+    audio_request_reopen();
+}
+
+void audio_alsa_set_capture_device(const char *dev) {
+    snprintf(m_requested_cap, sizeof(m_requested_cap), "%s", dev ? dev : "");
+    audio_request_reopen();
+}
+
+// A Bluetooth speaker takes the output while the microphone has to stay on the
+// sound card, and the card is not the same device as the playback one.
+void audio_alsa_capture_follow_card(void) {
+    resolve_auto_device(m_requested_cap, sizeof(m_requested_cap));
+    audio_request_reopen();
 }
 
 // The first USB/PnP card: usually the one that was plugged in, and never HDMI.
@@ -104,14 +143,24 @@ static int pick_usb_card(void) {
     return found;
 }
 
-// Pick something sane when the user has not said which device to use.
-static void resolve_device(char *out, size_t n) {
-    if (m_requested[0]) { snprintf(out, n, "%s", m_requested); return; }
+// What the station falls back to when a chosen device is not there: a
+// Bluetooth speaker that is switched off must not leave the station silent.
+static void resolve_auto_device(char *out, size_t n) {
     const char *env = getenv("M17WEB_ALSA_DEVICE");
     if (env && env[0]) { snprintf(out, n, "%s", env); return; }
     int card = pick_usb_card();
     if (card >= 0) { snprintf(out, n, "plughw:%d,0", card); return; }
     snprintf(out, n, "sysdefault");
+}
+
+// Pick something sane when the user has not said which device to use.  Capture
+// has its own choice because a Bluetooth speaker takes the output and leaves
+// the microphone on the card; with one configured device the two are the same,
+// which is what the station did before Bluetooth existed.
+static void resolve_device(char *out, size_t n, bool capture) {
+    if (capture && m_requested_cap[0]) { snprintf(out, n, "%s", m_requested_cap); return; }
+    if (m_requested[0]) { snprintf(out, n, "%s", m_requested); return; }
+    resolve_auto_device(out, n);
 }
 
 //
@@ -439,8 +488,19 @@ static void *cap_drain_thread(void *arg) {
 
 void audio_alsa_mic_open(void) {
     char dev[128];
-    resolve_device(dev, sizeof(dev));
-    if (open_pcm(&m_in, dev, SND_PCM_STREAM_CAPTURE, "microphone")) {
+    resolve_device(dev, sizeof(dev), true);
+    if (!open_pcm(&m_in, dev, SND_PCM_STREAM_CAPTURE, "microphone")) {
+        // A device asked for by name - a Bluetooth headset, or a card that has
+        // been unplugged - must not leave the station deaf.  Fall back to
+        // whatever card is present, and say so.
+        char alt[128];
+        resolve_auto_device(alt, sizeof(alt));
+        if (strcmp(alt, dev) != 0 && open_pcm(&m_in, alt, SND_PCM_STREAM_CAPTURE, "microphone")) {
+            printf("Audio Input: %s is not available, using %s\n", dev, alt);
+            snprintf(dev, sizeof(dev), "%s", alt);
+        }
+    }
+    if (m_in != NULL) {
         snprintf(m_used_in, sizeof(m_used_in), "%s", dev);
         audio_alsa_mixer_apply();
         pthread_mutex_lock(&m_cap_mtx);
@@ -465,8 +525,18 @@ void audio_alsa_mic_open(void) {
 
 void audio_alsa_spk_open(void) {
     char dev[128];
-    resolve_device(dev, sizeof(dev));
-    if (open_pcm(&m_out, dev, SND_PCM_STREAM_PLAYBACK, "speaker")) {
+    resolve_device(dev, sizeof(dev), false);
+    if (!open_pcm(&m_out, dev, SND_PCM_STREAM_PLAYBACK, "speaker")) {
+        // Same as capture: a Bluetooth speaker that is off, or a card that has
+        // gone, falls back to whatever is there rather than going silent.
+        char alt[128];
+        resolve_auto_device(alt, sizeof(alt));
+        if (strcmp(alt, dev) != 0 && open_pcm(&m_out, alt, SND_PCM_STREAM_PLAYBACK, "speaker")) {
+            printf("Audio Output: %s is not available, using %s\n", dev, alt);
+            snprintf(dev, sizeof(dev), "%s", alt);
+        }
+    }
+    if (m_out != NULL) {
         snprintf(m_used_out, sizeof(m_used_out), "%s", dev);
         // The card powers up with its own idea of the levels; put them back.
         audio_alsa_mixer_apply();

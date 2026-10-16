@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <ctype.h>
 #include "m17defines.h"
+#include "audio.h"
+#include "bluetooth.h"
 #ifdef HAVE_SIM
 #include "radio_sim.h"
 #endif
@@ -431,8 +433,110 @@ void mmi_parse(char *cmd){
 		}
 	}
 
-	// Stop transmitting
-	if(strncmp(token[0],"b",1)==0){
+	// Bluetooth audio: a speaker (A2DP, playback only - the microphone stays on
+	// the sound card) or a headset (HFP, both directions at M17's own 8 kHz,
+	// so nothing is lost against Codec2).  Both need bluealsa on the host; the
+	// station is unchanged without it and this says why.
+	//
+	//   bt                    what is known, and what is in use
+	//   bt use MAC speaker    trust it, connect, send the audio to it
+	//   bt use MAC headset    ...as a headset, microphone included
+	//   bt scan               look for devices for 20 s
+	//   bt off                back to the sound card
+	//   btdev MAC ROLE        the config.txt form: remembers, does not connect
+	if(strncmp(token[0],"bt",2)==0){
+		if(strncmp(token[0],"btdev",5)==0){
+			char play[160], cap[160];
+			if(nt == 2 && strncmp(token[1],"off",3)==0){
+				bt_clear();
+				audio_alsa_set_device("");
+				audio_alsa_set_capture_device("");
+				valid = true;
+			} else if(nt == 3 && bt_set_active(token[1], token[2])){
+				// Startup: no connection attempt here.  bluealsa reconnects to a
+				// trusted device itself, and if it is not there the audio falls
+				// back to the card instead of going silent.
+				bt_alsa_devices(play, sizeof(play), cap, sizeof(cap));
+				audio_alsa_set_device(play);
+				if(cap[0]) audio_alsa_set_capture_device(cap);
+				else       audio_alsa_capture_follow_card();
+				valid = true;
+			}
+		} else if(nt == 1){
+			char line[160];
+			if(!bt_available()){
+				gui_cmd_resp(bt_available_why());
+			} else {
+				bt_refresh();
+				snprintf(line, sizeof(line), "adapter %s%s", bt_adapter(),
+				         bt_powered() ? "" : " (powered off)");
+				gui_cmd_resp(line);
+				if(bt_active_mac()[0])
+					snprintf(line, sizeof(line), "using %s %s%s", bt_active_role(),
+					         bt_active_name()[0] ? bt_active_name() : bt_active_mac(),
+					         bt_active_connected() ? "  (connected)" : "  (not connected)");
+				else
+					snprintf(line, sizeof(line), "using the sound card");
+				gui_cmd_resp(line);
+				for(int i = 0; i < bt_count(); i++){
+					snprintf(line, sizeof(line), "%s  %s%s", bt_mac(i), bt_name(i),
+					         bt_connected(i) ? "  (connected)" : "");
+					gui_cmd_resp(line);
+				}
+				if(bt_count() == 0) gui_cmd_resp("nothing known yet: bt scan looks for devices");
+			}
+			valid = true;
+		} else if(nt == 2 && strncmp(token[1],"scan",4)==0){
+			if(!bt_available()){
+				gui_cmd_resp(bt_available_why());
+			} else {
+				bt_scan_async();
+				gui_cmd_resp("looking for devices for 20s, then run bt again");
+			}
+			valid = true;
+		} else if(nt == 2 && strncmp(token[1],"off",3)==0){
+			bt_clear();
+			audio_alsa_set_device("");
+			audio_alsa_set_capture_device("");
+			audio_set_backend(audio_parse_backend("alsa"));
+			save_line_to_config("btdev", "btdev off");
+			gui_cmd_resp("audio back on the sound card");
+			valid = true;
+		} else if(nt == 3 || (nt == 4 && strncmp(token[1],"use",3) == 0)){
+			// "bt <mac> speaker" and "bt use <mac> speaker" are both accepted.
+			char play[160], cap[160], line[96];
+			const char *mac  = token[nt - 2];
+			const char *role = token[nt - 1];
+			if(!bt_valid_mac(mac)){
+				gui_cmd_resp("not a Bluetooth address (xx:xx:xx:xx:xx:xx)");
+			} else if(!bt_available()){
+				gui_cmd_resp(bt_available_why());
+			} else if(!bt_set_active(mac, role)){
+				gui_cmd_resp("the role is speaker or headset");
+			} else {
+				// Connect first: bluealsa only creates the PCM once the
+				// profile is up, and pointing the audio at a PCM that is not
+				// there yet would just fall back to the sound card.
+				bool up = bt_connect_sync(mac, 12);
+				bt_alsa_devices(play, sizeof(play), cap, sizeof(cap));
+				audio_alsa_set_device(play);
+				if(cap[0]) audio_alsa_set_capture_device(cap);
+				else       audio_alsa_capture_follow_card();
+				audio_set_backend(audio_parse_backend("alsa"));
+				bt_connect_async(mac);   // and keep it connected from now on
+				if(!up) gui_cmd_resp("the device did not answer; the audio stays on the sound card");
+				snprintf(line, sizeof(line), "btdev %s %s", mac, role);
+				save_line_to_config("btdev", line);
+				gui_cmd_resp(cap[0] ? "headset: talk and listen through it (HFP, 8 kHz)"
+				                    : "speaker: the microphone stays on the sound card");
+				valid = true;
+			}
+		}
+	}
+
+	// Stop transmitting.  Exactly "b": any token starting with b would also
+	// stop the transmitter, so "ba" and "bt" used to do it as well.
+	if(strcmp(token[0],"b")==0){
 		m17_txrx_ptt_off();
 		valid = true;
 	}

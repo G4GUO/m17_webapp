@@ -51,6 +51,11 @@ double audio_get_spk_level(void);
 // Is a backend change waiting to be applied (takes effect when the audio paths
 // are next opened, i.e. at the next transmit/receive cycle)?
 bool           audio_backend_pending(void);
+// The device behind the current back end changed (a Bluetooth speaker was
+// chosen, say).  Nothing else needs touching: this makes the M17 code close
+// and open its streams again at the next cycle, which is how the change takes
+// effect without a restart.
+void           audio_request_reopen(void);
 // Last error from the active backend, "" if none. e.g. PulseAudio not running.
 const char    *audio_backend_error(void);
 // Which back ends were compiled in, and whether the local sound card streams
@@ -84,6 +89,17 @@ bool audio_alsa_spk_is_open(void);
 const char *audio_alsa_error(void);
 const char *audio_alsa_device(void);
 void audio_alsa_set_device(const char *dev);
+// Capture can be chosen separately: a Bluetooth speaker is playback only, so
+// the microphone stays on the sound card, while a Bluetooth headset uses one
+// device for both directions.  Empty means "the same as playback".
+void audio_alsa_set_capture_device(const char *dev);
+const char *audio_alsa_capture_device(void);
+// Capture on the card while playback goes somewhere else (a Bluetooth
+// speaker), so the microphone does not follow the output.
+void audio_alsa_capture_follow_card(void);
+// Are the streams open on something other than what is configured now?  Used
+// to tell a real device change from re-selecting what is already in use.
+bool audio_alsa_device_changed(void);
 // The card's own hardware mixer controls.  Names come from the card, so this
 // works for whatever is plugged in; values are percentages of what the control
 // allows, which gives the UI one slider shape for every card.  Setting one

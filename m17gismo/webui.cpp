@@ -25,6 +25,7 @@
 #include <pthread.h>
 
 #include "m17defines.h"
+#include "bluetooth.h"
 #include "webserver.h"
 #include "audio.h"
 #include "ui.h"
@@ -244,6 +245,18 @@ static void build_state(char *out, int len) {
                  (audio_get_backend() == AUDIO_ALSA && audio_local_ready()) ? "true" : "false",
                  audio_local_device(),
                  (audio_get_backend() == AUDIO_ALSA) ? audio_backend_error() : "");
+    // What Bluetooth knows, from the cache the "bt" command refreshes - this
+    // runs on the radio's thread and must never shell out.
+    o = json_add(out, len, o, ",\"bt\":{\"available\":%s,\"why\":\"%s\",\"adapter\":\"%s\",\"powered\":%s,"
+                 "\"role\":\"%s\",\"active\":\"%s\",\"active_name\":\"%s\",\"connected\":%s,\"devices\":[",
+                 bt_available() ? "true" : "false", bt_available_why(), bt_adapter(),
+                 bt_powered() ? "true" : "false", bt_active_role(), bt_active_mac(),
+                 bt_active_name(), bt_active_connected() ? "true" : "false");
+    for(int i = 0; i < bt_count(); i++)
+        o = json_add(out, len, o, "%s{\"mac\":\"%s\",\"name\":\"%s\",\"icon\":\"%s\",\"connected\":%s}",
+                     i ? "," : "", bt_mac(i), bt_name(i), bt_icon(i),
+                     bt_connected(i) ? "true" : "false");
+    o = json_add(out, len, o, "]}");
     o = json_add(out, len, o, ",\"mic_level\":%.3f,\"spk_level\":%.3f",
                  audio_get_mic_level(), audio_get_spk_level());
     o = json_add(out, len, o, ",\"tx_lead\":%d,\"tx_drops\":%ld,\"tx_overruns\":%ld",

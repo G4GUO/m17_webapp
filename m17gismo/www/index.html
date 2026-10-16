@@ -158,6 +158,10 @@
         <span class="lbl" id="audiopending"></span>
       </div>
       <div class="row">
+        <button id="btopen">Bluetooth&hellip;</button>
+        <span class="lbl" id="btstatus">no Bluetooth device selected</span>
+      </div>
+      <div class="row">
         <label class="meter"><span>mic</span><progress id="micbar" max="1" value="0"></progress></label>
         <label class="meter"><span>spk</span><progress id="spkbar" max="1" value="0"></progress></label>
       </div>
@@ -209,6 +213,21 @@
     </div>
   </section>
 </main>
+<dialog id="btdlg">
+  <h2>Bluetooth audio</h2>
+  <p class="note" id="btnote">Looking for devices&hellip;</p>
+  <div class="btlist" id="btlist"></div>
+  <p class="note">
+    <b>Speaker</b> is A2DP: the best audio, playback only, so the microphone stays on
+    the Pi sound card. <b>Headset</b> is HFP: both directions at 8 kHz, which is M17's own
+    rate, so nothing is lost - but a device does one or the other, not both at once.
+  </p>
+  <div class="row">
+    <button id="btscan" class="mini">scan for devices</button>
+    <button id="btoff" class="mini">use the sound card</button>
+    <button id="btclose" class="mini">close</button>
+  </div>
+</dialog>
 <script src="/app.js"></script>
 </body>
 </html>

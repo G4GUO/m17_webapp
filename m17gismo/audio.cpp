@@ -72,7 +72,20 @@ AudioBackend audio_get_backend(void) { return m_backend; }
 // A change was requested while the streams were open: it is applied the next
 // time they are closed/opened (the M17 code does that per transmit/receive
 // cycle), so the UI can say so and the radio loop can apply it promptly.
-bool audio_backend_pending(void) { return m_pending != AUDIO_NONE; }
+bool audio_backend_pending(void) {
+    if (m_pending == AUDIO_NONE) return false;
+#ifdef HAVE_ALSA
+    // Selecting the device that is already open is not a change: re-opening it
+    // would only risk losing the stream.
+    if (m_pending == AUDIO_ALSA && m_backend == AUDIO_ALSA && !audio_alsa_device_changed())
+        return false;
+#endif
+    return true;
+}
+
+void audio_request_reopen(void) {
+    if (m_mic_open || m_spk_open) m_pending = m_backend;
+}
 
 bool audio_have_pulse(void) {
 #ifdef HAVE_PULSE

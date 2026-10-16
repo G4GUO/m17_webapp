@@ -125,6 +125,7 @@ function applyState(s) {
   renderHwPtt(s);
   renderMode(s);
   renderMixer(s);
+  renderBt(s);
   $('simrow').style.display = (s.radio === 'sim') ? 'flex' : 'none';
 }
 
@@ -186,6 +187,60 @@ function renderAudioStatus(s) {
 // set of them changes, and a value is not written back while its own slider has
 // focus - the state stream runs continuously and would fight a drag.
 let mixerSig = '';
+// Bluetooth audio.  The state carries the list the "bt" command cached, so the
+// dialog only ever renders: opening it asks the station for a refresh, and the
+// next state message fills it in.  Nothing here runs per state message.
+let btSig = '';
+function renderBt(s) {
+  const b = (s && s.bt) || {};
+  const st = $('btstatus');
+  const open = $('btopen');
+  if (!st || !open) return;
+  if (!b.available) {
+    open.disabled = true;
+    st.textContent = b.why ? ('Bluetooth unavailable: ' + b.why) : 'Bluetooth unavailable';
+    st.style.color = 'var(--dim)';
+    return;
+  }
+  open.disabled = false;
+  if (b.active) {
+    st.textContent = b.role + ': ' + (b.active_name || b.active) +
+      (b.connected ? ' (connected)' : ' (not connected)');
+    st.style.color = b.connected ? 'var(--green)' : 'var(--amber)';
+  } else {
+    st.textContent = 'no Bluetooth device selected';
+    st.style.color = 'var(--dim)';
+  }
+  const devs = b.devices || [];
+  const sig = devs.map(d => d.mac + (d.connected ? '1' : '0')).join('|') + '#' + (b.active || '');
+  if (sig === btSig) return;
+  btSig = sig;
+  const note = $('btnote');
+  if (note) note.textContent = b.adapter
+    ? ('adapter ' + b.adapter + (b.powered ? '' : ' (powered off)') +
+       (devs.length ? '' : ' - nothing known yet, try scan'))
+    : 'no Bluetooth adapter found';
+  const box = $('btlist');
+  if (!box) return;
+  box.innerHTML = '';
+  for (const d of devs) {
+    const row = document.createElement('div');
+    row.className = 'btdev' + (d.mac === b.active ? ' active' : '');
+    const name = document.createElement('span');
+    name.textContent = d.name + (d.connected ? ' (connected)' : '');
+    const mac = document.createElement('code');
+    mac.textContent = d.mac;
+    const spk = document.createElement('button');
+    spk.className = 'mini'; spk.textContent = 'speaker';
+    spk.onclick = () => cmd('bt use ' + d.mac + ' speaker');
+    const hs = document.createElement('button');
+    hs.className = 'mini'; hs.textContent = 'headset';
+    hs.onclick = () => cmd('bt use ' + d.mac + ' headset');
+    row.append(name, mac, spk, hs);
+    box.append(row);
+  }
+}
+
 function renderMixer(s) {
   const ctls = s.mixer || [];
   const box = $('mixerctls');
@@ -469,6 +524,22 @@ function wire() {
   window.addEventListener('blur', () => {
     if (txHeld) { txHeld = false; btn.classList.remove('live'); cmd('rx'); }
   });
+
+  const btDlg = $('btdlg');
+  if (btDlg) {
+    $('btopen').onclick = () => {
+      btSig = '';                 // rebuild the list when the answer arrives
+      cmd('bt');                  // ask the station to refresh its cache
+      if (!btDlg.open) btDlg.showModal();
+    };
+    $('btclose').onclick = () => btDlg.close();
+    $('btoff').onclick = () => cmd('bt off');
+    $('btscan').onclick = () => {
+      cmd('bt scan');
+      $('btnote').textContent = 'scanning for 20 seconds...';
+      setTimeout(() => cmd('bt'), 22000);
+    };
+  }
 
   $('breakbtn').onclick = () => { txHeld = false; $('pttbtn').classList.remove('live'); cmd('b'); };
   $('carrierbtn').onclick = () => cmd('tc');
