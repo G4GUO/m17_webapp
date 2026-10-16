@@ -38,6 +38,8 @@ static char m_used_in[128];
 static char m_used_out[128];
 static char m_error[160];
 static int m_error_stream;   // 1 = microphone, 2 = speaker: what m_error refers to
+static bool m_fb_mic;        // the last microphone open used the fallback device
+static bool m_fb_spk;        // ...and the last speaker open
 static struct timespec m_last_read;      // when the transmitter last asked for audio
 static bool m_have_read;
 static bool m_ctl_valid;    // the card's mixer controls have been read (see below)
@@ -98,6 +100,8 @@ const char *audio_alsa_capture_device(void) {
 // closing and re-opening a Bluetooth PCM in the same breath upsets bluealsa
 // ("Device or resource busy"), and the station would fall back to the card for
 // no reason at all.
+bool audio_alsa_fell_back(void) { return m_fb_mic || m_fb_spk; }
+
 bool audio_alsa_device_changed(void) {
     char out[128], cap[128];
     resolve_device(out, sizeof(out), false);
@@ -488,6 +492,7 @@ static void *cap_drain_thread(void *arg) {
 
 void audio_alsa_mic_open(void) {
     char dev[128];
+    m_fb_mic = false;
     resolve_device(dev, sizeof(dev), true);
     if (!open_pcm(&m_in, dev, SND_PCM_STREAM_CAPTURE, "microphone")) {
         // A device asked for by name - a Bluetooth headset, or a card that has
@@ -498,6 +503,7 @@ void audio_alsa_mic_open(void) {
         if (strcmp(alt, dev) != 0 && open_pcm(&m_in, alt, SND_PCM_STREAM_CAPTURE, "microphone")) {
             printf("Audio Input: %s is not available, using %s\n", dev, alt);
             snprintf(dev, sizeof(dev), "%s", alt);
+            m_fb_mic = true;
         }
     }
     if (m_in != NULL) {
@@ -525,6 +531,7 @@ void audio_alsa_mic_open(void) {
 
 void audio_alsa_spk_open(void) {
     char dev[128];
+    m_fb_spk = false;
     resolve_device(dev, sizeof(dev), false);
     if (!open_pcm(&m_out, dev, SND_PCM_STREAM_PLAYBACK, "speaker")) {
         // Same as capture: a Bluetooth speaker that is off, or a card that has
@@ -534,6 +541,7 @@ void audio_alsa_spk_open(void) {
         if (strcmp(alt, dev) != 0 && open_pcm(&m_out, alt, SND_PCM_STREAM_PLAYBACK, "speaker")) {
             printf("Audio Output: %s is not available, using %s\n", dev, alt);
             snprintf(dev, sizeof(dev), "%s", alt);
+            m_fb_spk = true;
         }
     }
     if (m_out != NULL) {

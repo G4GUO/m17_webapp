@@ -100,6 +100,9 @@ void audio_alsa_capture_follow_card(void);
 // Are the streams open on something other than what is configured now?  Used
 // to tell a real device change from re-selecting what is already in use.
 bool audio_alsa_device_changed(void);
+// Did the last open have to fall back to the sound card?  A Bluetooth device
+// that is still coming up needs another attempt, not a silent station.
+bool audio_alsa_fell_back(void);
 // The card's own hardware mixer controls.  Names come from the card, so this
 // works for whatever is plugged in; values are percentages of what the control
 // allows, which gives the UI one slider shape for every card.  Setting one

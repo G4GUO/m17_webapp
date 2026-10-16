@@ -69,6 +69,12 @@ const char *audio_backend_name(AudioBackend b) {
 
 AudioBackend audio_get_backend(void) { return m_backend; }
 
+// A change of device can need more than one attempt: a Bluetooth headset's SCO
+// link is created when the first of its two streams opens, so the other one has
+// to be tried again once that has happened.
+static int m_retry_left;              // attempts left
+static struct timespec m_retry_at;    // ...and not before this
+
 // A change was requested while the streams were open: it is applied the next
 // time they are closed/opened (the M17 code does that per transmit/receive
 // cycle), so the UI can say so and the radio loop can apply it promptly.
@@ -79,12 +85,28 @@ bool audio_backend_pending(void) {
     // would only risk losing the stream.
     if (m_pending == AUDIO_ALSA && m_backend == AUDIO_ALSA && !audio_alsa_device_changed())
         return false;
+    // A device that was not up yet - a Bluetooth headset's SCO link is created
+    // when the first of its streams opens, so the other one has to wait for it -
+    // gets a few more attempts, spaced out, and then the fallback stands.
+    if (m_retry_left <= 0) return false;
+    {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (now.tv_sec < m_retry_at.tv_sec) return false;
+        m_retry_left--;
+        m_retry_at = now;
+        m_retry_at.tv_sec += 2;
+    }
 #endif
     return true;
 }
 
 void audio_request_reopen(void) {
-    if (m_mic_open || m_spk_open) m_pending = m_backend;
+    if (m_mic_open || m_spk_open) {
+        m_pending = m_backend;
+        m_retry_left = 8;             // a Bluetooth profile can take a moment
+        clock_gettime(CLOCK_MONOTONIC, &m_retry_at);
+    }
 }
 
 bool audio_have_pulse(void) {
@@ -183,7 +205,14 @@ void audio_mic_open(void) {
     if (want_browser(m_backend)) audio_web_mic_open();
     if (want_file(m_backend))    audio_file_mic_open();
     m_mic_open = true;
-    m_pending = AUDIO_NONE;
+    // If the device asked for was not there (a Bluetooth device still coming
+    // up), leave the request standing so the next cycle tries again.
+    bool fell = false;
+#ifdef HAVE_ALSA
+    if (want_alsa(m_backend)) fell = audio_alsa_fell_back();
+#endif
+    if (fell) { m_pending = m_backend; if (m_retry_left <= 0) m_retry_left = 8; }
+    else      m_pending = AUDIO_NONE;
 }
 
 void audio_mic_close(void) {
@@ -209,7 +238,12 @@ void audio_spk_open(void) {
     if (want_browser(m_backend)) audio_web_spk_open();
     if (want_file(m_backend))    audio_file_spk_open();
     m_spk_open = true;
-    m_pending = AUDIO_NONE;
+    bool fell = false;
+#ifdef HAVE_ALSA
+    if (want_alsa(m_backend)) fell = audio_alsa_fell_back();
+#endif
+    if (fell) { m_pending = m_backend; if (m_retry_left <= 0) m_retry_left = 8; }
+    else      m_pending = AUDIO_NONE;
 }
 
 void audio_spk_close(void) {
