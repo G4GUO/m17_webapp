@@ -412,6 +412,48 @@ the wrong side.
 This is what makes `amixer`, `alsactl store` and an `ExecStartPre=` line in the
 unit unnecessary: the levels belong to the application that is using the card.
 
+## Bluetooth audio: a speaker or a headset
+
+A Bluetooth device is not a sound card, so it needs a backend that speaks Linux
+audio.  This station deliberately has no PulseAudio or PipeWire, so the backend
+is **BlueALSA** (`bluez-alsa-utils` and `libasound2-plugin-bluez`), which
+registers each connected device with ALSA as a PCM the existing ALSA code can
+open unchanged:
+
+    bluealsa:DEV=F4:4E:FD:5D:F9:A1,PROFILE=a2dp    A2DP, playback only
+    bluealsa:DEV=E8:07:BF:39:62:F9,PROFILE=sco     HFP, both directions
+
+Two profiles matter, and one device does one of them at a time:
+
+| mode | what it is | microphone |
+|---|---|---|
+| **speaker** | A2DP: the best audio, ~100-200 ms of latency | stays on the sound card |
+| **headset** | HFP: both directions at 8 kHz mono, i.e. M17's own rate | the headset's own |
+
+Nothing is lost by HFP's 8 kHz: M17 carries Codec2 at 3.2 kbps.
+
+The console (and the **Bluetooth...** button in the Audio panel) drives it:
+
+    bt                     what Bluetooth knows, and what is in use
+    bt use MAC speaker     trust it, connect, and send the output to it
+    bt use MAC headset     ...as a headset, microphone included
+    bt scan                look for devices for 20 seconds
+    bt off                 back to the Pi sound card
+
+`bt use` writes itself into `config.txt` (as `btdev MAC ROLE`), so the choice
+survives a restart.  Details worth knowing:
+
+* **A device has to be trusted, not just paired.**  BlueZ refuses the profile
+  connection otherwise, which reads as a connection attempt that is cancelled
+  with no explanation.  `bt use` trusts as part of connecting.
+* **The audio falls back to the sound card** if the device is off, out of range,
+  or not connected yet, rather than going silent - the log says which.
+* Pointing the audio at a device connects it **first**: bluealsa only creates
+  the A2DP PCM once the profile is up, so routing to a PCM that does not exist
+  yet is a race.
+* With no bluealsa installed nothing changes: `bt` says why, and the station
+  behaves exactly as before.
+
 ## Modes, and changing them while running
 
 The mode is how the station is wired up:

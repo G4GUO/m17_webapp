@@ -400,6 +400,25 @@ def build(path: str) -> None:
         "time the audio is opened \u2014 so a card that drops off USB and returns gets its levels "
         "back with it, and a reboot does not undo them. The console does the same: <b>mixer</b> "
         "lists the controls, and <b>mixer 0 100</b> sets one.")
+    m.h2("Bluetooth: a speaker or a headset")
+    m.p("There is a <b>Bluetooth&hellip;</b> button beside the audio device. It opens a list of the "
+        "devices the station already knows \u2014 each with a <b>speaker</b> and a <b>headset</b> button "
+        "\u2014 plus a <b>scan</b> to look for new ones. Choosing a device connects it, sends the "
+        "audio to it, and remembers the choice for the next start. <b>use the sound card</b> puts "
+        "the audio back where it was.")
+    m.p("A Bluetooth device does one of two things at a time, and they are not interchangeable. "
+        "<b>Speaker</b> is A2DP: the best audio quality, but playback only, so the microphone stays "
+        "on the Pi's sound card, and there is a delay of about a fifth of a second. <b>Headset</b> is "
+        "HFP: both directions through the headset, and it is the headset's own microphone you talk "
+        "into. HFP works at 8 kHz mono \u2014 which is exactly M17's own rate, so nothing is lost.")
+    m.p("The console does the same thing, and is the way to do it without the mouse: <b>bt</b> lists "
+        "the devices and what is in use, <b>bt use &lt;address&gt; speaker</b> or <b>bt use "
+        "&lt;address&gt; headset</b> chooses one, <b>bt scan</b> looks for new devices for twenty "
+        "seconds, and <b>bt off</b> goes back to the sound card.")
+    m.p("If the device is switched off, or out of range, the audio stays on the sound card rather "
+        "than going silent \u2014 so press <b>speaker</b> or <b>headset</b> again once it is on. "
+        "Bluetooth audio needs the <code>bluez-alsa</code> packages on the Pi; without them the "
+        "button says so and everything else is unchanged.")
     m.h2("If the browser refuses your microphone")
     m.p("Browsers only allow microphone access on a secure page. A page opened as "
         "<b>http://&lt;address&gt;:8080/</b> is not secure, so the microphone may be blocked. Either "
@@ -529,6 +548,11 @@ def build(path: str) -> None:
         ["mixer", "List the sound card's own controls and what they are set to - see section 7."],
         ["mixer 0 100", "Set control number 0 to 100%. <b>on</b> and <b>off</b> also work, for a "
                         "switch. Kept in config.txt for the next start."],
+        ["bt", "List the Bluetooth devices the station knows, and which is in use - see section 7."],
+        ["bt use MAC speaker", "Play through a Bluetooth speaker; the microphone stays on the sound card."],
+        ["bt use MAC headset", "Talk and listen through a Bluetooth headset, at 8 kHz."],
+        ["bt scan", "Look for Bluetooth devices for 20 seconds."],
+        ["bt off", "Put the audio back on the Pi sound card."],
         ["lead 4", "Blank codec frames sent before the voice - see section 7."],
         ["gps", "Show the GPS receiver, the fix and your locator. <b>gps /dev/ttyACM1 38400</b> uses a "
                 "different receiver."],
