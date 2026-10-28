@@ -16,6 +16,9 @@ Checks, in order:
   * tagged microphone audio keyed with "tx" reaches the modulator (mic_level
     moves, tx_drops stays small)
   * decoded receive audio comes back tagged for the speaker
+
+It connects as /ws?client=phone, the way the app does; a station whose microphone
+route is "phone" only takes audio from a client that identifies itself.
 --legacy runs the pre-2026 app instead: untagged binary, and "TF 146400000"
 style text parsing.  It should fail, and says how.
 """
@@ -90,7 +93,9 @@ def main():
     host = args[0] if args else "127.0.0.1"
     port = int(args[1]) if len(args) > 1 else 8080
 
-    ws = WSClient(host, port)
+    # Connect the way the app does: as the phone, so a station whose audio is
+    # routed to the phone will accept this client's microphone.
+    ws = WSClient(host, port, path="/ws?client=phone")
     head = Head(ws)
     print(f"station {host}:{port}")
 
