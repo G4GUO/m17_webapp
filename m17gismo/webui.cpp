@@ -20,6 +20,8 @@
 #include <stdarg.h>
 #include <signal.h>
 #include <unistd.h>
+#include "fargan.h"
+#include "recorder.h"
 #include <time.h>
 #include <ctype.h>
 #include <pthread.h>
@@ -72,16 +74,15 @@ static int   m_log_count;      // total lines ever logged
 static pthread_mutex_t m_log_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 static long  m_last_state_ms;
-static long  m_frames_seen;
 
-// Which web client asked for PTT.  A remote head is a network away from the
-// radio: if the phone loses Wi-Fi in the middle of an over, nothing sends "rx"
-// and the station would hold the carrier (transmitting silence) until someone
-// noticed.  The client that keyed it owns the keying, and silence from it for
-// MIC_WATCHDOG_MS releases it.
+// Which client asked for PTT.  A remote head is a network away from the radio:
+// if the phone loses Wi-Fi mid-over, nothing sends "rx" and the station would
+// hold the carrier - transmitting silence - until somebody noticed.  The client
+// that keyed it owns the keying, and silence from it releases it.
 static int   m_keyed_client = -1;
 static long  m_last_mic_ms;
 #define MIC_WATCHDOG_MS 3000
+static long  m_frames_seen;
 
 // ---------------------------------------------------------------------------
 static long now_ms(void) {
@@ -242,9 +243,21 @@ static void build_state(char *out, int len) {
     o = json_add(out, len, o, ",\"frames\":%u,\"gerr\":%u", db->n_frames, db->g_errors);
     o = json_add(out, len, o, ",\"ref\":{\"name\":\"%s\",\"module\":\"%c\",\"connected\":%s}",
                  ref, mod, m17_net_connected() ? "true" : "false");
-    o = json_add(out, len, o, ",\"audio\":\"%s\",\"audio_pending\":%s",
-                 audio_backend_name(audio_get_backend()),
-                 audio_backend_pending() ? "true" : "false");
+    {
+        // The two directions are routed separately, which is what the Audio
+        // configuration box selects; "audio" keeps the old whole-pair summary
+        // for anything that still reads it (a top bar, a script).
+        char sum[48];
+        audio_route_summary(sum, sizeof(sum));
+        o = json_add(out, len, o, ",\"audio\":\"%s\",\"audio_pending\":%s"
+                     ",\"spk_route\":\"%s\",\"mic_route\":\"%s\""
+                     ",\"mic_gain\":%.3f,\"spk_vol\":%.3f",
+                     sum,
+                     audio_backend_pending() ? "true" : "false",
+                     audio_route_name(audio_get_route(true)),
+                     audio_route_name(audio_get_route(false)),
+                     audio_get_mic_gain(), audio_get_spk_vol());
+    }
     o = json_add(out, len, o, ",\"pulse\":{\"compiled\":%s,\"ready\":%s,\"error\":\"%s\"}",
                  audio_have_pulse() ? "true" : "false",
                  (audio_get_backend() == AUDIO_PULSE && audio_local_ready()) ? "true" : "false",
@@ -254,20 +267,59 @@ static void build_state(char *out, int len) {
                  (audio_get_backend() == AUDIO_ALSA && audio_local_ready()) ? "true" : "false",
                  audio_local_device(),
                  (audio_get_backend() == AUDIO_ALSA) ? audio_backend_error() : "");
+    // The neural receiver: receive-only, so this says what this station does with
+    // what it hears, not anything about what other stations will hear.
+    o = json_add(out, len, o, ",\"fargan\":{\"compiled\":%s,\"on\":%s}",
+                 fargan_rx_compiled() ? "true" : "false",
+                 fargan_rx_enabled() ? "true" : "false");
+    {
+        // The synthesis thread's health: frames queued and decoded, how many
+        // were dropped because it could not keep up, and how many times the
+        // audio path found nothing ready.  All three stay at zero when it is
+        // keeping pace, which is the whole question on a Pi.
+        unsigned long fq = 0, fd = 0, fdrop = 0, fdry = 0;
+        fargan_rx_stats(&fq, &fd, &fdrop, &fdry);
+        o = json_add(out, len, o, ",\"fargan_rx\":{\"queued\":%lu,\"decoded\":%lu,"
+                     "\"dropped\":%lu,\"dry\":%lu}", fq, fd, fdrop, fdry);
+    }
+    {
+        // The recorder: whether it is running, which file, and how long.  Not a
+        // remembered setting, so this says what is actually happening.
+        unsigned long rs = 0;
+        unsigned int  rsec = 0;
+        rec_stats(&rs, &rsec);
+        o = json_add(out, len, o, ",\"record\":{\"on\":%s,\"file\":\"%s\",\"rate\":%d,"
+                     "\"seconds\":%u,\"samples\":%lu,\"error\":\"%s\"}",
+                     rec_active() ? "true" : "false", rec_file(), rec_rate(), rsec, rs, rec_error());
+    }
     // What Bluetooth knows, from the cache the "bt" command refreshes - this
-    // runs on the radio's thread and must never shell out.
+    // runs on the radio's thread and must never shell out.  Output and input are
+    // reported separately: they are chosen separately, and one may be the sound
+    // card while the other is Bluetooth.
     o = json_add(out, len, o, ",\"bt\":{\"available\":%s,\"why\":\"%s\",\"adapter\":\"%s\",\"powered\":%s,"
-                 "\"role\":\"%s\",\"active\":\"%s\",\"active_name\":\"%s\",\"connected\":%s,\"devices\":[",
+                 "\"out\":{\"mac\":\"%s\",\"name\":\"%s\",\"profile\":\"%s\",\"connected\":%s},"
+                 "\"in\":{\"mac\":\"%s\",\"name\":\"%s\",\"connected\":%s},\"devices\":[",
                  bt_available() ? "true" : "false", bt_available_why(), bt_adapter(),
-                 bt_powered() ? "true" : "false", bt_active_role(), bt_active_mac(),
-                 bt_active_name(), bt_active_connected() ? "true" : "false");
+                 bt_powered() ? "true" : "false",
+                 bt_out_mac(), bt_out_name(), bt_out_profile(),
+                 bt_out_connected() ? "true" : "false",
+                 bt_in_mac(), bt_in_name(), bt_in_connected() ? "true" : "false");
     for(int i = 0; i < bt_count(); i++)
-        o = json_add(out, len, o, "%s{\"mac\":\"%s\",\"name\":\"%s\",\"icon\":\"%s\",\"connected\":%s}",
+        o = json_add(out, len, o, "%s{\"mac\":\"%s\",\"name\":\"%s\",\"icon\":\"%s\",\"connected\":%s,\"paired\":%s,\"out\":%s,\"in\":%s,"
+                 "\"a2dp\":%s,\"hfp\":%s}",
                      i ? "," : "", bt_mac(i), bt_name(i), bt_icon(i),
-                     bt_connected(i) ? "true" : "false");
+                     bt_connected(i) ? "true" : "false",
+                     bt_paired(i) ? "true" : "false",
+                     strcmp(bt_out_mac(), bt_mac(i)) == 0 ? "true" : "false",
+                     strcmp(bt_in_mac(),  bt_mac(i)) == 0 ? "true" : "false",
+                     bt_device_a2dp(bt_mac(i)) ? "true" : "false",
+                     bt_device_hfp(bt_mac(i)) ? "true" : "false");
     o = json_add(out, len, o, "]}");
     o = json_add(out, len, o, ",\"mic_level\":%.3f,\"spk_level\":%.3f",
                  audio_get_mic_level(), audio_get_spk_level());
+    // Playback underruns: the number that separates "the card ran dry" from
+    // "nothing arrived to play" when a report of dropouts comes in.
+    o = json_add(out, len, o, ",\"spk_xruns\":%ld", audio_alsa_spk_xruns());
     o = json_add(out, len, o, ",\"tx_lead\":%d,\"tx_drops\":%ld,\"tx_overruns\":%ld",
                  m17_tx_lead_frames(), audio_tx_dropped(), audio_tx_overruns());
     {
@@ -353,7 +405,13 @@ static void build_state(char *out, int len) {
                      m17_tx_hw_ptt() ? "true" : "false",
                      rpi_gpio_out_pin(), rpi_gpio_in_pin(), gerr);
     }
+    // What arrived from the client, separately from what the modulator got: the
+    // VU meter cannot tell "the phone is silent" from "the station is not using
+    // it", and these two numbers can.
+    o = json_add(out, len, o, ",\"mic_in\":{\"msgs\":%ld,\"peak\":%.3f,\"age_ms\":%ld}",
+                 audio_web_mic_messages(), audio_web_mic_peak(), audio_web_mic_age_ms());
     o = json_add(out, len, o, ",\"clients\":%d", m_srv ? ws_client_count(m_srv) : 0);
+    o = json_add(out, len, o, ",\"phone_clients\":%d", m_srv ? ws_count_role(m_srv, "phone") : 0);
     o = json_add(out, len, o, ",\"refs\":%d", m_refs_count);
     o = json_add(out, len, o, ",\"rx_stream\":%lu", (unsigned long)(db->n_frames - m_frames_seen));
     o = json_add(out, len, o, ",\"uptime\":%ld}", (long)(now_ms() / 1000));
@@ -444,17 +502,18 @@ static void web_unkey(const char *why) {
     push_state();
 }
 
-// Only a browser-route station is driven by audio from a client.  With the
-// sound card or PulseAudio the telephone link is not what keys it, so the
-// watchdog must stay out of the way.
+// Only a web route is driven by audio from a client.  With the sound card or a
+// Bluetooth device the network is not what keys the station, so this must stay
+// out of the way.
 static bool web_mic_from_client(void) {
-    AudioBackend b = audio_get_backend();
-    return b == AUDIO_BROWSER || b == AUDIO_BOTH;
+    AudioRoute r = audio_get_route(false);
+    return r == AROUTE_BROWSER || r == AROUTE_PHONE;
 }
 
 static void web_on_open(const WsClientInfo *ci, void *user) {
     (void)user;
-    log_send("info", "client connected: %s", ci->peer);
+    if (ci->role[0]) log_send("info", "client connected: %s (%s)", ci->peer, ci->role);
+    else             log_send("info", "client connected: %s", ci->peer);
     // Read the reflector list first: the greeting pushes the state, and that
     // should already report how many reflectors were found.  Waiting for the page
     // to ask for the list left the drop down empty whenever the answer arrived
@@ -465,7 +524,6 @@ static void web_on_open(const WsClientInfo *ci, void *user) {
 
 static void web_on_close(int id, void *user) {
     (void)user;
-    // A remote head that disappears mid-over cannot send "rx" any more.
     if (id == m_keyed_client) web_unkey("the client that keyed it disconnected");
     log_send("info", "client %d disconnected", id);
 }
@@ -582,7 +640,6 @@ static void web_note_ptt(const char *cmd, int id) {
         m_last_mic_ms = now_ms();
     } else if (strcasecmp(cmd, "rx") == 0 || strcasecmp(cmd, "b") == 0 ||
                strcasecmp(cmd, "break") == 0) {
-        // "b"/"break" is the page's own unkey, and any client's "rx" releases.
         m_keyed_client = -1;
     }
 }
@@ -591,6 +648,11 @@ static void web_on_msg(int id, int is_binary, const uint8_t *data, int len, void
     (void)user;
     if (is_binary) {
         if (len > 1 && data[0] == AUDIO_TAG_MIC) {
+            // The phone route takes the microphone from the phone and nowhere
+            // else; the browser route keeps taking it from any client, which is
+            // what it has always done.
+            const char *role = ws_client_role(m_srv, id);
+            if (audio_get_route(false) == AROUTE_PHONE && strcmp(role, "phone") != 0) return;
             int n = (len - 1) / 2;
             m_last_mic_ms = now_ms();
             audio_web_mic_push((const int16_t *)(data + 1), n);
@@ -617,8 +679,6 @@ static void web_on_tick(void *user) {
     (void)user;
     if (!m_srv) return;
     // A keyed station whose client has gone quiet is a stuck carrier: release it.
-    // Only when the client's audio is what feeds the microphone, and never when
-    // the hardware switch is holding the station on.
     if (m_keyed_client >= 0 && m17_txrx_ptt_state() != 0 && !m17_tx_hw_ptt() &&
         web_mic_from_client() && (now_ms() - m_last_mic_ms) > MIC_WATCHDOG_MS) {
         web_unkey("no microphone audio from the client for 3 s");
@@ -632,6 +692,9 @@ static void web_on_tick(void *user) {
 void webui_audio_to_browser(const int16_t *s, int len) {
     if (!m_srv || len <= 0) return;
     if (ws_client_count(m_srv) == 0) return;
+    // With the phone route the audio belongs to the phone alone, so a page open
+    // on the desk can be the control surface without also being the speaker.
+    const char *only = (audio_get_route(true) == AROUTE_PHONE) ? "phone" : NULL;
     static uint8_t buf[1 + 2048];
     int maxsamples = (int)(sizeof(buf) - 1) / 2;
     int off = 0;
@@ -640,7 +703,8 @@ void webui_audio_to_browser(const int16_t *s, int len) {
         if (chunk > maxsamples) chunk = maxsamples;
         buf[0] = AUDIO_TAG_SPK;
         memcpy(buf + 1, s + off, (size_t)chunk * 2);
-        ws_broadcast_bin(m_srv, buf, 1 + chunk * 2);
+        if (only) ws_broadcast_bin_role(m_srv, only, buf, 1 + chunk * 2);
+        else      ws_broadcast_bin(m_srv, buf, 1 + chunk * 2);
         off += chunk;
     }
 }

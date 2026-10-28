@@ -28,12 +28,57 @@ typedef enum {
     AUDIO_BOTH
 } AudioBackend;
 
+// Where each direction's audio comes from / goes to, chosen separately.  This
+// is the model the web UI presents: the speaker and the microphone each have
+// one of these four, and "Configure Audio" attaches them.
+//
+// The older AudioBackend above still describes the pair as a whole, and is what
+// "-a alsa", "audio both" and the file back end still use; audio_set_backend()
+// maps it onto the two routes.
+typedef enum {
+    AROUTE_MUTE = 0,   // nothing: silence in, discarded out
+    AROUTE_BROWSER,    // the web page's WebAudio (over the WebSocket)
+    AROUTE_PHONE,      // over the WebSocket, but only the phone app: a client
+                       // that connected with ?client=phone.  Lets the desk page
+                       // be the control surface while the phone is the mic and
+                       // the speaker.
+    AROUTE_CARD,       // the Pi's sound card, direct through ALSA
+    AROUTE_BT,         // the Bluetooth device chosen in "Configure Bluetooth"
+    AROUTE_PULSE       // the Pi's sound card through PulseAudio (console only)
+} AudioRoute;
+
 // Selects the routing (call before audio_mic_open/audio_spk_open)
 bool           audio_set_backend(AudioBackend b);
 AudioBackend   audio_parse_backend(const char *name);
 const char    *audio_backend_name(AudioBackend b);
 AudioBackend   audio_get_backend(void);
 void           audio_backend_status(char *out, int len);   // human readable
+
+// ---- Per-direction routes ------------------------------------------------
+const char    *audio_route_name(AudioRoute r);          // "mute", "browser",
+                                                        // "soundcard", "bluetooth"
+AudioRoute     audio_parse_route(const char *name);     // accepts those, plus
+                                                        // card/alsa/bt/web/pulse
+AudioRoute     audio_get_route(bool out);               // false = microphone
+// Attach both directions.  Whatever is open for a direction that changed is
+// closed and reopened at the next safe moment - never in mid-transmission - and
+// a direction that did not change is left alone.
+void           audio_apply_routes(AudioRoute out, AudioRoute in);
+// The sound card the "soundcard" route should use, by name ("plughw:3,0").
+// Empty means "whatever card is present".  Remembered across route changes.
+void           audio_set_card_device(const char *dev);
+void           audio_set_route(bool out, AudioRoute r);
+// A short "soundcard / bluetooth" style summary for the interface's top bar.
+void           audio_route_summary(char *out, int len);
+// Mic gain and speaker volume, applied on the Pi: gain is applied to the
+// microphone audio after it is read and before the modulator sees it, and the
+// volume to received audio before it is written out.  The VU meters are
+// measured after both, so what they show is what the radio (or the speaker)
+// actually gets.
+void           audio_set_mic_gain(double g);            // 0..4, 1.0 = unity
+double         audio_get_mic_gain(void);
+void           audio_set_spk_vol(double v);             // 0..1
+double         audio_get_spk_vol(void);
 
 // Public API used by the M17 code (implemented by audio.cpp, the dispatcher)
 void audio_mic_open(void);
@@ -83,6 +128,10 @@ void audio_alsa_output(int16_t *s, int len);
 void audio_alsa_flush(void);
 bool audio_alsa_ready(void);
 long audio_alsa_overruns(void);
+// Playback underruns (XRUNs) since the station started.  A receiver that drops
+// out in bursts is either this or something upstream, and the two look the same
+// from the speaker - so count them.
+long audio_alsa_spk_xruns(void);
 long audio_alsa_starved(void);
 bool audio_alsa_mic_is_open(void);
 bool audio_alsa_spk_is_open(void);
@@ -98,8 +147,25 @@ const char *audio_alsa_capture_device(void);
 // speaker), so the microphone does not follow the output.
 void audio_alsa_capture_follow_card(void);
 // Are the streams open on something other than what is configured now?  Used
-// to tell a real device change from re-selecting what is already in use.
+// to tell a real device change from re-selecting what is already in use.  The
+// two directions are reported separately, so moving the microphone does not
+// tear down a speaker that is working.
 bool audio_alsa_device_changed(void);
+bool audio_alsa_out_device_changed(void);
+bool audio_alsa_in_device_changed(void);
+// True when a device was asked for by name (a Bluetooth PCM, or a card), as
+// opposed to "whatever card is present".  A named device is retried slowly
+// forever: it may be switched on long after the station started.
+bool audio_alsa_device_requested(void);
+// A Bluetooth direction is selected but its stream is not open (the HFP link
+// may not exist yet).  This has to be retried even when the other direction is
+// happily open, which is what used to stop the microphone from ever recovering.
+bool audio_alsa_side_missing(void);
+bool audio_alsa_out_missing(void);      // speaker selected but not open
+bool audio_alsa_in_missing(void);       // microphone selected but not open
+// Apply a pending change, touching only the direction that needs it: a working
+// stream must not be torn down to retry the other one.
+void audio_apply_pending(void);
 // Did the last open have to fall back to the sound card?  A Bluetooth device
 // that is still coming up needs another attempt, not a silent station.
 bool audio_alsa_fell_back(void);
@@ -136,6 +202,9 @@ void audio_web_mic_push(const int16_t *s, int len);   // from the WebSocket clie
 int  audio_web_mic_available(void);
 int  audio_web_input(int16_t *s, int len);            // returns samples delivered
 long audio_web_mic_starved(void);                     // samples padded with silence
+long audio_web_mic_messages(void);                    // messages received this over
+double audio_web_mic_peak(void);                      // loudest sample received, 0..1
+long audio_web_mic_age_ms(void);                      // since the last message, -1 = never
 void audio_web_mic_flush(void);                       // drop pre-transmission audio
 void audio_web_output(int16_t *s, int len);           // forwarded to the browser
 bool audio_web_active(void);

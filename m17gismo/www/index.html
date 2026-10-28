@@ -44,7 +44,7 @@
 
     <div class="card">
       <h2>Mode</h2>
-      <div class="radio-stack">
+      <div class="grid2">
         <label class="chk"><input type="radio" name="mode" value="radio"> radio &mdash; normal</label>
         <label class="chk"><input type="radio" name="mode" value="loop"> loopback &mdash; practice</label>
         <label class="chk"><input type="radio" name="mode" value="gate"> gateway &mdash; radio to reflector</label>
@@ -56,20 +56,22 @@
 
     <div class="card">
       <h2>Radio</h2>
-      <div class="radio-stack">
+      <div class="grid2">
         <label>RX frequency (Hz)<input id="rxfreq" type="number" step="1" min="1"></label>
+        <label>TX frequency (Hz)<input id="txfreq" type="number" step="1" min="1"></label>
         <label>RX gain <output id="rggainout">0.00</output>
           <input id="rggain" type="range" min="0" max="1" step="0.05"></label>
-        <label>TX frequency (Hz)<input id="txfreq" type="number" step="1" min="1"></label>
         <label>TX gain <output id="tggainout">0.00</output>
           <input id="tggain" type="range" min="0" max="1" step="0.05"></label>
         <label>freq correction<input id="fc" type="number" step="0.000001" min="0.9" max="1.1"></label>
-        <label class="chk"><input type="checkbox" id="afc"> AFC</label>
+        <div class="row tight">
+          <button id="freqapply" class="mini">apply frequencies</button>
+          <label class="chk"><input type="checkbox" id="afc"> AFC</label>
+        </div>
       </div>
       <div class="row">
-        <button id="freqapply">apply frequencies</button>
-        <button data-cmd="tc">transmit carrier</button>
-        <button data-cmd="rx">receive</button>
+        <button data-cmd="tc" class="mini">transmit carrier</button>
+        <button data-cmd="rx" class="mini">receive</button>
       </div>
       <div class="row simrow" id="simrow">
         <span class="lbl">simulator:</span>
@@ -109,9 +111,7 @@
           <div class="row">
             <button id="copygrid" class="mini">copy locator</button>
             <label class="chk"><input type="checkbox" id="csvtick"> log to CSV</label>
-          </div>
-          <div class="row">
-            <label class="chk"><input type="checkbox" id="metatick"> announce position on air</label>
+            <label class="chk"><input type="checkbox" id="metatick"> announce on air</label>
           </div>
           <p class="note" id="gpsdetail">waiting for the GPS&hellip;</p>
           <p class="note" id="csvstate"></p>
@@ -136,44 +136,36 @@
     </div>
 
     <div class="card">
-      <h2>Audio</h2>
-      <label>audio device
-        <select id="audioselect">
-          <option value="alsa">Raspberry Pi sound card (direct)</option>
-          <option value="browser">browser microphone / speaker</option>
-          <option value="pulse">Raspberry Pi sound card (PulseAudio)</option>
-          <option value="both">browser + Pi sound card</option>
-          <option value="none">mute (no audio)</option>
-        </select>
-      </label>
-      <p class="note" id="audiostatus">checking the Pi sound card&hellip;</p>
+      <h2>Audio <span class="badge" id="audiosummary">-</span></h2>
       <div class="row">
-        <label class="lbl">blank frames before voice
-          <input id="leadframes" type="number" min="0" max="50" step="2" value="4" style="width:5em">
-        </label>
-        <span class="lbl" id="txdrops">0 dropped samples</span>
+        <button id="audiocfg" class="wide">Audio configuration&hellip;</button>
+        <button id="audioenable" class="mini">enable browser audio</button>
       </div>
       <div class="row">
-        <button id="audioenable">enable browser audio</button>
-        <span class="lbl" id="audiopending"></span>
+        <div class="vu">
+          <div class="dial" id="micdial" aria-label="microphone level"><span class="dialcap">mic</span></div>
+          <div class="dial" id="spkdial" aria-label="speaker level"><span class="dialcap">spk</span></div>
+        </div>
+        <div class="sliders">
+          <label class="slider">mic level <output id="micgainout">0.0 dB</output>
+            <input id="micgain" type="range" min="0" max="200" step="5" value="100" title="Microphone gain, applied on the Pi before the modulator. 100% = 0 dB, 200% = +6 dB."></label>
+          <label class="slider">volume <output id="spkvolout">-2.0 dB</output>
+            <input id="spkvol" type="range" min="0" max="100" step="5" value="80" title="Speaker volume, applied on the Pi to the audio it plays. 100% = 0 dB."></label>
+        </div>
       </div>
+      <p class="note" id="audiostatus">checking the audio&hellip;</p>
+      <p class="note" id="micin"></p>
+      <p class="note" id="audioerr"></p>
       <div class="row">
-        <button id="btopen">Bluetooth&hellip;</button>
-        <span class="lbl" id="btstatus">no Bluetooth device selected</span>
+        <label class="chk" title="Receive-only: FARGAN synthesis of the same Codec2 frames, at 16 kHz, on its own thread. Costs about half a Pi core.">
+          <input type="checkbox" id="fargan" onchange="cmd('fargan ' + (this.checked ? 'on' : 'off'))">
+          neural receiver (FARGAN)</label>
+        <label class="chk" title="Records what the receiver decodes, exactly as it is played, as a mono 8 kHz WAV in the working directory. Not remembered across restarts, and it stops itself after 30 minutes.">
+          <input type="checkbox" id="recbox" onchange="cmd('record ' + (this.checked ? 'on' : 'off'))">
+          record</label>
+        <span class="lbl" id="farganstat"></span>
+        <span class="lbl" id="recstat"></span>
       </div>
-      <div class="row">
-        <label class="meter"><span>mic</span><progress id="micbar" max="1" value="0"></progress></label>
-        <label class="meter"><span>spk</span><progress id="spkbar" max="1" value="0"></progress></label>
-      </div>
-      <div class="row">
-        <label>volume <input id="volume" type="range" min="0" max="1" step="0.05" value="0.8"></label>
-        <label class="chk"><input type="checkbox" id="mute"> mute</label>
-      </div>
-      <p class="note">
-        <b>Direct</b> talks to the card through ALSA (reliable on a Pi, no daemon);
-        <b>PulseAudio</b> goes through the daemon; <b>browser</b> needs a secure
-        context (<code>https://</code> or <code>localhost</code>) for its microphone.
-      </p>
     </div>
     <div class="card" id="mixercard">
       <h2>Mixer <span class="badge" id="mixerbadge">sound card</span></h2>
@@ -181,6 +173,10 @@
       <p class="note" id="mixernote">The card's own controls.</p>
     </div>
     <div class="card ptt">
+      <div class="row meters">
+        <label class="meter"><span>signal</span><progress id="signalbar" max="1" value="0"></progress></label>
+        <label class="meter"><span>power</span><progress id="powerbar" max="1" value="0"></progress></label>
+      </div>
       <div class="pttstate"><span id="pttled" class="led">RX</span>
         <span id="frameind" class="badge">no signal</span></div>
       <button id="pttbtn" class="ptt-button" disabled>PUSH TO&nbsp;TALK<span class="hint">(or hold space)</span></button>
@@ -191,8 +187,10 @@
         <button id="duplexbtn" class="mini">duplex</button>
       </div>
       <div class="row">
-        <label class="meter"><span>signal</span><progress id="signalbar" max="1" value="0"></progress></label>
-        <label class="meter"><span>power</span><progress id="powerbar" max="1" value="0"></progress></label>
+        <label class="lbl inline" title="Silence sent before your speech at the start of a transmission">
+          lead-in <input id="leadframes" type="number" min="0" max="50" step="2" value="4" style="width:3.6em">
+        </label>
+        <span class="lbl" id="txdrops">0 dropped samples</span>
       </div>
     </div>
   </section>
@@ -213,18 +211,50 @@
     </div>
   </section>
 </main>
+<dialog id="audiodlg">
+  <h2>Audio configuration</h2>
+  <p class="note">Choose where the speaker output goes and where the microphone comes from,
+     then press <b>Configure Audio</b>. Nothing changes until you do. <b>phone</b> is the M17
+     app: it keys the station itself, and with this page set to <b>phone</b> the page stays a
+     control surface instead of taking the audio.</p>
+  <div class="cfgcols">
+    <fieldset class="cfgcol">
+      <legend>Speaker</legend>
+      <label class="chk"><input type="radio" name="spkroute" value="browser"> browser &mdash; this computer</label>
+      <label class="chk"><input type="radio" name="spkroute" value="phone"> phone &mdash; the M17 app</label>
+      <label class="chk"><input type="radio" name="spkroute" value="soundcard"> soundcard &mdash; the Pi's card</label>
+      <label class="chk"><input type="radio" name="spkroute" value="bluetooth"> bluetooth &mdash; the chosen device</label>
+      <label class="chk"><input type="radio" name="spkroute" value="mute"> mute &mdash; no output</label>
+    </fieldset>
+    <fieldset class="cfgcol">
+      <legend>Microphone</legend>
+      <label class="chk"><input type="radio" name="microute" value="browser"> browser &mdash; this computer</label>
+      <label class="chk"><input type="radio" name="microute" value="phone"> phone &mdash; the M17 app</label>
+      <label class="chk"><input type="radio" name="microute" value="soundcard"> soundcard &mdash; the Pi's card</label>
+      <label class="chk"><input type="radio" name="microute" value="bluetooth"> bluetooth &mdash; the chosen device</label>
+      <label class="chk"><input type="radio" name="microute" value="mute"> mute &mdash; silence</label>
+    </fieldset>
+  </div>
+  <p class="note" id="cfgbtstate">Bluetooth: looking&hellip;</p>
+  <p class="note" id="cfgstatus"></p>
+  <div class="row">
+    <button id="cfgbt">Configure Bluetooth</button>
+    <button id="cfgaudio">Configure Audio</button>
+    <button id="cfgclose" class="mini">close</button>
+  </div>
+</dialog>
 <dialog id="btdlg">
   <h2>Bluetooth audio</h2>
   <p class="note" id="btnote">Looking for devices&hellip;</p>
   <div class="btlist" id="btlist"></div>
   <p class="note">
-    <b>Speaker</b> is A2DP: the best audio, playback only, so the microphone stays on
-    the Pi sound card. <b>Headset</b> is HFP: both directions at 8 kHz, which is M17's own
-    rate, so nothing is lost - but a device does one or the other, not both at once.
+    <b>speaker</b> is A2DP - the best audio, playback only - unless the device has no A2DP,
+    in which case it is driven as <b>speaker (HFP)</b> at 8 kHz, which is M17's own rate. <b>mic</b>
+    is always HFP, the device's own microphone. Choosing a device here only connects it; press
+    <b>Configure Audio</b> in the audio box to attach it.
   </p>
   <div class="row">
     <button id="btscan" class="mini">scan for devices</button>
-    <button id="btoff" class="mini">use the sound card</button>
     <button id="btclose" class="mini">close</button>
   </div>
 </dialog>
