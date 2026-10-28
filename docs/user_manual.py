@@ -370,6 +370,18 @@ def build(path: str) -> None:
     m.p("Releasing the switch returns you to receive. Releasing it does not cancel a transmission you "
         "started from the browser, so the two ways of transmitting do not fight each other.")
 
+    m.h2("Transmitting from a phone or another computer")
+    m.p("The page is one client of the station and the Android app is another: both key the transmitter "
+        "over the network and both feed it your voice the same way. So the station can be left "
+        "transmitting by a client that is no longer there \u2014 a phone that drops off the Wi-Fi in the "
+        "middle of an over, or a browser window closed while you are speaking. It does not stay keyed: "
+        "the carrier is released as soon as the client that keyed it disconnects, and after three "
+        "seconds in which no microphone audio arrives from it. The log says which happened, for "
+        "example <b>unkeyed: the client that keyed it disconnected</b>.")
+    m.p("This only applies when your voice is coming from a browser or a phone. With the sound card "
+        "selected the microphone is local, nothing arrives over the network, and the guard stays out "
+        "of the way. A transmission started with the physical switch is never cut short by it.")
+
     m.h1("7. Audio \u2014 where your voice comes from and goes")
     m.p("Set this once in the <b>Audio</b> panel; it stays set.")
     m.table([
