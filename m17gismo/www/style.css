@@ -9,6 +9,9 @@
   --green: #3ecf8e;
   --amber: #ffb020;
   --red: #ff5c5c;
+  --tan: #d3b18a;         /* SMS: light brown, readable on the dark panel */
+  --tan-dim: #a8855c;
+  --tan-bg: #5e4228;
   font-size: 15px;
 }
 * { box-sizing: border-box; }
@@ -28,15 +31,25 @@ header h1 { font-size: 1.15rem; margin: 0; letter-spacing: .06em; color: var(--a
 .hdr-item.diag { align-items: center; cursor: pointer; user-select: none; }
 .hdr-item.diag input { margin: 0; }
 /* SMS: the list is newest first, and each line carries the time, the station it
-   came from and the text - a message is unreadable without the first two. */
-#smslist { max-height: 15rem; overflow-y: auto; margin-top: .35rem; }
-.sms { padding: .18rem 0; border-bottom: 1px solid var(--line); font-size: .78rem; line-height: 1.45; }
-.sms:last-child { border-bottom: none; }
-.smst { color: var(--dim); margin-right: .5rem; }
-.smss { color: var(--cyan); font-weight: 600; margin-right: .5rem; }
-.smstx { color: var(--ink); white-space: pre-wrap; word-break: break-word; }
-#smsinput { flex: 1; }
-#smshint { margin-top: .2rem; }
+   came from and the text - a message is unreadable without the first two.  The
+   callsign is bracketed in the text too, so it is obvious where the message
+   starts even when the colour is lost in a screenshot or a printout. */
+#smscard { border-color: rgba(211, 177, 138, .55);
+           background: linear-gradient(180deg, rgba(94, 66, 40, .28), rgba(23, 28, 34, .35) 70%); }
+#smscard h2 { color: var(--tan); }
+#smscard h2 .lbl { color: var(--tan-dim); }
+#smslist { max-height: 12rem; overflow-y: auto; margin-top: .4rem; }
+.sms { padding: .22rem .35rem; border-left: 2px solid rgba(211, 177, 138, .45);
+       margin-bottom: .2rem; background: rgba(94, 66, 40, .16); border-radius: 0 3px 3px 0;
+       font-size: .78rem; line-height: 1.45; }
+.sms:first-child { border-left-color: var(--tan); background: rgba(94, 66, 40, .34); }
+.smst { color: var(--tan-dim); margin-right: .5rem; font-size: .72rem; }
+.smss { color: var(--tan); font-weight: 600; margin-right: .5rem; }
+.smstx { color: var(--fg); white-space: pre-wrap; word-break: break-word; }
+#smsinput { flex: 1; background: rgba(94, 66, 40, .18); border-color: rgba(211, 177, 138, .40); }
+#smshint { margin-top: .2rem; color: var(--tan-dim); }
+#smssend { background: rgba(94, 66, 40, .55); border-color: rgba(211, 177, 138, .55); color: #f3e3cd; }
+#smssend:hover { background: rgba(120, 84, 48, .70); }
 
 /* Help search box: part of the help card, sized to the card not the page */
 #helpsearch { width: 100%; font-size: .78rem; padding: .2rem .4rem; }

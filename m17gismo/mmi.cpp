@@ -114,16 +114,30 @@ void mmi_parse(char *cmd){
 	// SMS takes the rest of the line verbatim, so it is handled before the
 	// tokeniser eats the spaces.  sms <text> sends; sms alone reports.
 	if(strncmp(cmd,"sms",3)==0 && (cmd[3] == 0 || cmd[3] == ' ')){
-		char        line[200];
+		char        line[400];
 		const char *p = cmd + 3;
 		int         st;
 
 		while(*p == ' ') p++;
 		if(*p == 0){
-			snprintf(line, sizeof line, "SMS: %d message%s kept, %d characters max - sms <text> sends",
-			         m17_sms_count(), m17_sms_count() == 1 ? "" : "s", M17_SMS_MAX_TEXT);
-			printf("%s\n", line);
-			gui_cmd_resp(line);
+			// No argument lists what has been heard, which is what a station
+			// without a browser needs.  Newest first, five of them.
+			int shown = m17_sms_count();
+			if(shown > 5) shown = 5;
+			if(shown == 0){
+				snprintf(line, sizeof line, "SMS: nothing heard yet, %d characters max - sms <text> sends",
+				         M17_SMS_MAX_TEXT);
+				printf("%s\n", line);
+				gui_cmd_resp(line);
+			}else{
+				for(int i = 0; i < shown; i++){
+					const SmsMsg *m = m17_sms_get(i);
+					if(m == NULL) continue;
+					snprintf(line, sizeof line, "%s [%s] %s", m->time, m->src, m->text);
+					printf("%s\n", line);
+					gui_cmd_resp(line);
+				}
+			}
 		}else{
 			st = m17_sms_queue(p);
 			if(st == 0){

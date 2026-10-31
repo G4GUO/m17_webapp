@@ -33,8 +33,12 @@ typedef struct {
     int  len;
 } SmsMsg;
 
-/* Start the transmit thread.  Safe to call once, at start-up. */
+/* Nothing to start: transmission is serviced from the transmitter thread by
+ * m17_sms_service(), the same place AX.25 is serviced from. */
 int  m17_sms_init(void);
+
+/* Transmit one queued message.  1 if a burst was sent, 0 otherwise. */
+int  m17_sms_service(void);
 
 /* Queue a message for transmission.  0 queued, -1 empty, -2 queue full. */
 int  m17_sms_queue(const char *text);

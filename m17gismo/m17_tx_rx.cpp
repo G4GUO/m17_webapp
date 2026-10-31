@@ -7,6 +7,7 @@
 #include <time.h>
 #include "m17defines.h"
 #include "m17_ax25.h"
+#include "m17_sms.h"
 #include "fargan.h"   // receive-only neural synthesis; a stub unless FARGAN_RX
 #include "recorder.h" // optional capture of the decoded audio as a WAV
 // codec2 (or the modified codec through codec2mod/codec2_shim.h) is included by
@@ -403,6 +404,11 @@ void *m17_txrx_thread(void *arg){
 				// clear.  It keys up, sends the burst and unkeys before
 				// returning; a no-op unless packet mode has been turned on.
 				if (m17_ax25_service())
+				    continue;
+				// SMS over M17: one message per pass, sent from this
+				// thread because the modulator and the radio's buffers
+				// belong to it.
+				if (m17_sms_service())
 				    continue;
 			}
 		    audio_spk_close();

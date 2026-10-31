@@ -37,9 +37,7 @@ static char            m_q[SMS_QUEUE][M17_SMS_MAX_TEXT + 1];
 static int             m_q_head;
 static int             m_q_count;
 static pthread_mutex_t m_q_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_t       m_thread;
-static int             m_thread_started;
-static volatile int    m_run;
+static unsigned        m_sent;
 
 static void stamp(char *out, size_t n)
 {
@@ -102,9 +100,12 @@ void m17_sms_rx_packet(const uint8_t *data, int len)
             snprintf(m.src, sizeof m.src, "UNKNOWN");
     }
 
-    printf("m17web: RX  SMS %d bytes from %s\n", m.len, m.src);
+    /* Brackets because the callsign is not part of the message - without them a
+     * headless log reads as though the sender's call were the first word of the
+     * text.  Same shape in the console and in the journal. */
+    printf("m17web: RX  SMS  [%s] %s\n", m.src, m.text);
     fflush(stdout);
-    gui_log_event("rx", "RX  SMS %d bytes from %s", m.len, m.src);
+    gui_log_event("rx", "RX  SMS  [%s] %s", m.src, m.text);
 
     pthread_mutex_lock(&m_rx_lock);
     m_rx_head = (m_rx_head + 1) % M17_SMS_KEEP;
@@ -192,62 +193,58 @@ static int take(char *out)
     return got;
 }
 
-static void *sms_thread(void *arg)
+/* Transmit one queued message.  Called from the transmitter thread - the same
+ * place AX.25 is serviced from - because the modulator, the transmit sample
+ * buffer and the Pluto's buffers all belong to that thread.  Running it on a
+ * thread of its own segfaults the station within one burst. */
+int m17_sms_service(void)
 {
     static uint8_t blk[M17_MAX_APP_BYTES + 4];
     char   text[M17_SMS_MAX_TEXT + 1];
     int    n, st;
 
-    (void)arg;
-    while (m_run) {
-        if (!take(text)) {
-            usleep(100000);
-            continue;
-        }
-        n = (int)strlen(text);
-        if (n > M17_SMS_MAX_TEXT) {
-            n = M17_SMS_MAX_TEXT;
-            text[n] = 0;
-        }
+    if (!take(text))
+        return 0;
 
-        /* Application block: type specifier, the message, and the terminator the
-         * specification asks for.  The M17 CRC and the 25-byte chunking are the
-         * frame builder's job, exactly as they are for AX.25. */
-        blk[0] = M17_TYPE_SMS;
-        memcpy(&blk[1], text, (size_t)n);
-        blk[1 + n] = 0;
-
-        printf("m17web: TX  SMS %d bytes  (onto air)\n", n);
-        fflush(stdout);
-        gui_log_event("tx", "TX  SMS %d bytes onto air", n);
-
-        st = m17_send_app_burst(blk, n + 2);
-        if (st == -2) {
-            /* The transmitter was busy with voice: give it a moment and try
-             * again rather than dropping the message. */
-            pthread_mutex_lock(&m_q_lock);
-            m_q_head = (m_q_head - 1 + SMS_QUEUE) % SMS_QUEUE;
-            m_q_count++;
-            pthread_mutex_unlock(&m_q_lock);
-            usleep(500000);
-        } else if (st != 0) {
-            printf("m17web: SMS not transmitted (%d)\n", st);
-            fflush(stdout);
-            gui_log_event("err", "SMS not transmitted (%d)", st);
-        }
+    n = (int)strlen(text);
+    if (n > M17_SMS_MAX_TEXT) {
+        n = M17_SMS_MAX_TEXT;
+        text[n] = 0;
     }
-    return NULL;
+
+    /* Application block: type specifier, the message, and the terminator the
+     * specification asks for.  The M17 CRC and the 25-byte chunking are the
+     * frame builder's job, exactly as they are for AX.25. */
+    blk[0] = M17_TYPE_SMS;
+    memcpy(&blk[1], text, (size_t)n);
+    blk[1 + n] = 0;
+
+    printf("m17web: TX  SMS %d bytes  (onto air)\n", n);
+    fflush(stdout);
+    gui_log_event("tx", "TX  SMS %d bytes onto air", n);
+
+    st = m17_send_app_burst(blk, n + 2);
+    if (st == -2) {
+        /* Voice has the transmitter.  Put it back at the head of the queue and
+         * try again on the next pass rather than dropping the message. */
+        pthread_mutex_lock(&m_q_lock);
+        m_q_head = (m_q_head - 1 + SMS_QUEUE) % SMS_QUEUE;
+        m_q_count++;
+        pthread_mutex_unlock(&m_q_lock);
+        return 0;
+    }
+    if (st != 0) {
+        printf("m17web: SMS not transmitted (%d)\n", st);
+        fflush(stdout);
+        gui_log_event("err", "SMS not transmitted (%d)", st);
+        return 1;
+    }
+    m_sent++;
+    return 1;
 }
 
+/* Nothing to start: transmission is serviced from the transmitter thread. */
 int m17_sms_init(void)
 {
-    if (m_thread_started)
-        return 0;
-    m_run = 1;
-    if (pthread_create(&m_thread, NULL, sms_thread, NULL) != 0) {
-        m_run = 0;
-        return -1;
-    }
-    m_thread_started = 1;
     return 0;
 }

@@ -1200,6 +1200,7 @@ function handleBinary(u8) {
 // that sent them; the list keeps the last M17_SMS_KEEP so a page opened much
 // later still shows what has been heard.
 let smsMax = 821;
+const SMS_SHOWN = 5;      // how many messages the card shows; the station keeps more
 
 function addSms(m) {
   const list = $('smslist');
@@ -1211,7 +1212,7 @@ function addSms(m) {
   t.textContent = m.time || '--:--:--';
   const s = document.createElement('span');
   s.className = 'smss';
-  s.textContent = m.src || '?';
+  s.textContent = '[' + (m.src || '?') + ']';   // brackets: not part of the message
   const x = document.createElement('span');
   x.className = 'smstx';
   x.textContent = m.text || '';
@@ -1219,7 +1220,7 @@ function addSms(m) {
   d.appendChild(s);
   d.appendChild(x);
   list.insertBefore(d, list.firstChild);
-  while (list.children.length > 32)
+  while (list.children.length > SMS_SHOWN)
     list.removeChild(list.lastChild);
   smsCount();
 }
