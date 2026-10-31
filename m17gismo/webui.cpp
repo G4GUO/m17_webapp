@@ -31,6 +31,7 @@
 #include "webserver.h"
 #include "audio.h"
 #include "ui.h"
+#include "m17_sms.h"
 
 #define DEFAULT_WEB_PORT 8080
 #define LOG_LINES        200
@@ -483,7 +484,8 @@ static void send_hello(int id) {
     char hello[256];
     snprintf(hello, sizeof(hello),
              "{\"t\":\"hello\",\"app\":\"m17web\",\"proto\":1,\"stamp\":\"%s\","
-             "\"audio_tag_mic\":1,\"audio_tag_spk\":2,\"rate\":8000}", M17WEB_STAMP);
+             "\"audio_tag_mic\":1,\"audio_tag_spk\":2,\"rate\":8000,\"sms_max\":%d}",
+             M17WEB_STAMP, M17_SMS_MAX_TEXT);
     ws_send_text(m_srv, id, hello);
 
     // Help text
@@ -519,6 +521,41 @@ static void send_hello(int id) {
         ws_send_text(m_srv, id, "{\"t\":\"state\"}");
     } else {
         ws_send_text(m_srv, id, st);
+    }
+
+    // Messages heard before this client arrived, oldest first.
+    gui_sms_replay(id);
+}
+
+/* ------------------------------------------------------------------- SMS */
+
+// Tell every open page about a message the receiver just decoded.
+void gui_sms_received(const SmsMsg *m) {
+    if (m == NULL || m_srv == NULL) return;
+    char esc[M17_SMS_MAX_TEXT * 2 + 8];
+    char msg[M17_SMS_MAX_TEXT * 3 + 128];
+    json_escape(m->text, esc, sizeof(esc));
+    snprintf(msg, sizeof(msg),
+             "{\"t\":\"sms\",\"time\":\"%s\",\"src\":\"%s\",\"text\":\"%s\"}",
+             m->time, m->src, esc);
+    ws_broadcast_text(m_srv, msg);
+}
+
+// Send the kept messages to one client, oldest first, so a page that opens later
+// still shows what has been heard.
+void gui_sms_replay(int id) {
+    if (m_srv == NULL) return;
+    int n = m17_sms_count();
+    for (int i = n - 1; i >= 0; i--) {
+        const SmsMsg *m = m17_sms_get(i);
+        if (m == NULL) continue;
+        char esc[M17_SMS_MAX_TEXT * 2 + 8];
+        char msg[M17_SMS_MAX_TEXT * 3 + 128];
+        json_escape(m->text, esc, sizeof(esc));
+        snprintf(msg, sizeof(msg),
+                 "{\"t\":\"sms\",\"time\":\"%s\",\"src\":\"%s\",\"text\":\"%s\"}",
+                 m->time, m->src, esc);
+        ws_send_text(m_srv, id, msg);
     }
 }
 
@@ -560,6 +597,27 @@ static void web_on_close(int id, void *user) {
 // Pull "cmd":"..." out of a JSON object without a full parser
 static int extract_cmd(const char *in, char *out, int len) {
     const char *p = strstr(in, "\"cmd\"");
+    if (!p) return -1;
+    p = strchr(p, ':');
+    if (!p) return -1;
+    p++;
+    while (*p == ' ') p++;
+    if (*p != '"') return -1;
+    p++;
+    int o = 0;
+    while (*p && *p != '"' && o < len - 1) {
+        if (*p == '\\' && p[1]) p++;
+        out[o++] = *p++;
+    }
+    out[o] = 0;
+    return 0;
+}
+
+// Pull "text" out of {"t":"sms","text":"..."}.  The message is far longer than a
+// command line, so it gets its own message type rather than a "sms <text>"
+// command: the command buffer would have cut it at 250 characters.
+static int extract_text(const char *in, char *out, int len) {
+    const char *p = strstr(in, "\"text\"");
     if (!p) return -1;
     p = strchr(p, ':');
     if (!p) return -1;
@@ -691,6 +749,25 @@ static void web_on_msg(int id, int is_binary, const uint8_t *data, int len, void
     char cmd[256];
     const char *txt = (const char *)data;
     if (len > 0 && txt[0] == '{') {
+        if (strstr(txt, "\"t\":\"sms\"") != NULL) {
+            /* A message from the SMS card: up to M17_SMS_MAX_TEXT characters,
+             * queued for transmission.  The station truncates independently of
+             * the page, so nothing can overrun the packet. */
+            char text[M17_SMS_MAX_TEXT + 1];
+            if (extract_text(txt, text, sizeof(text)) == 0) {
+                int st = m17_sms_queue(text);
+                if (st == 0) {
+                    int n = (int)strlen(text);
+                    if (n > M17_SMS_MAX_TEXT) n = M17_SMS_MAX_TEXT;
+                    char line[96];
+                    snprintf(line, sizeof(line), "SMS queued, %d characters", n);
+                    gui_cmd_resp(line);
+                } else if (st == -2) {
+                    gui_cmd_resp("SMS queue full - wait for the last one to go");
+                }
+            }
+            return;
+        }
         if (extract_cmd(txt, cmd, sizeof(cmd)) == 0) {
             web_note_ptt(cmd, id);
             run_command(cmd);

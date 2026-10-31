@@ -55,6 +55,7 @@ static const char *const help_lines[] = {
 	"bt off          put the audio back on the Pi sound card",
 	"agi nnnn        configure audio input gain (dB)",
 	"load FILE       run commands from FILE",
+	"sms <text>      send a text message (M17 type 0x05); sms alone reports",
 	"w               clear the log pane",
 	"b               break: stop transmitting",
 	"q               quit m17web",

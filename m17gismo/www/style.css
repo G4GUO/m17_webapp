@@ -27,6 +27,17 @@ header h1 { font-size: 1.15rem; margin: 0; letter-spacing: .06em; color: var(--a
 .hdr-item .val { font-weight: 600; }
 .hdr-item.diag { align-items: center; cursor: pointer; user-select: none; }
 .hdr-item.diag input { margin: 0; }
+/* SMS: the list is newest first, and each line carries the time, the station it
+   came from and the text - a message is unreadable without the first two. */
+#smslist { max-height: 15rem; overflow-y: auto; margin-top: .35rem; }
+.sms { padding: .18rem 0; border-bottom: 1px solid var(--line); font-size: .78rem; line-height: 1.45; }
+.sms:last-child { border-bottom: none; }
+.smst { color: var(--dim); margin-right: .5rem; }
+.smss { color: var(--cyan); font-weight: 600; margin-right: .5rem; }
+.smstx { color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+#smsinput { flex: 1; }
+#smshint { margin-top: .2rem; }
+
 /* Help search box: part of the help card, sized to the card not the page */
 #helpsearch { width: 100%; font-size: .78rem; padding: .2rem .4rem; }
 

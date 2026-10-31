@@ -5,6 +5,7 @@
 #include <math.h>
 #include "m17defines.h"
 #include "m17_ax25.h"
+#include "m17_sms.h"
 #include "audio.h"
 #include "bluetooth.h"
 #include "fargan.h"
@@ -109,6 +110,37 @@ void mmi_parse(char *cmd){
 	                 cmd[cl-1] == ' '  || cmd[cl-1] == '	'))
 		cmd[--cl] = 0;
 	if(cl == 0) return;
+
+	// SMS takes the rest of the line verbatim, so it is handled before the
+	// tokeniser eats the spaces.  sms <text> sends; sms alone reports.
+	if(strncmp(cmd,"sms",3)==0 && (cmd[3] == 0 || cmd[3] == ' ')){
+		char        line[200];
+		const char *p = cmd + 3;
+		int         st;
+
+		while(*p == ' ') p++;
+		if(*p == 0){
+			snprintf(line, sizeof line, "SMS: %d message%s kept, %d characters max - sms <text> sends",
+			         m17_sms_count(), m17_sms_count() == 1 ? "" : "s", M17_SMS_MAX_TEXT);
+			printf("%s\n", line);
+			gui_cmd_resp(line);
+		}else{
+			st = m17_sms_queue(p);
+			if(st == 0){
+				int n = (int)strlen(p);
+				if(n > M17_SMS_MAX_TEXT) n = M17_SMS_MAX_TEXT;
+				snprintf(line, sizeof line, "SMS queued, %d characters", n);
+			}else if(st == -2){
+				snprintf(line, sizeof line, "SMS queue full - wait for the last one to go");
+			}else{
+				snprintf(line, sizeof line, "SMS: nothing to send");
+			}
+			printf("%s\n", line);
+			gui_cmd_resp(line);
+		}
+		gui_update();
+		return;
+	}
 
 	token[nt] = strtok(cmd," ");
 	while(token[nt] != NULL){

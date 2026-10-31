@@ -32,6 +32,9 @@ extern "C" {
  * Not in m17defines.h, and it needs a buffer with room for the two CRC bytes
  * it appends, so callers pass a copy. */
 void m17_send_packet_frames(uint8_t *packet, int len);
+/* m17_rx_parse.cpp: hand a reassembled application block to the dispatcher, so
+ * a loopback burst takes exactly the path a received one does. */
+void valid_packet_received(uint8_t *packet, int len);
 
 /* Frame builders in m17_tx_routines.cpp.  The wire test needs them directly so
  * it can intercept the dibits instead of transmitting them. */
@@ -84,6 +87,10 @@ static uint8_t         m_decbuf[1024];
 
 static m17_bridge      m_bridge;
 static pthread_mutex_t m_lock = PTHREAD_MUTEX_INITIALIZER;
+/* Held across a burst so an AX.25 frame and an SMS can never interleave on air.
+ * Separate from m_lock, which guards state: a burst lasts up to a second and
+ * holding the state lock for that long would stall the KISS reader. */
+static pthread_mutex_t m_burst_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t        m_last_activity;
 
 static unsigned        m_rx_frames, m_tx_frames, m_looped, m_rejected;
@@ -584,7 +591,80 @@ void m17_ax25_rx_stream(const unsigned char *data, int len)
 
 /* ------------------------------------------------------------ transmit */
 
-/* Build the packet, then either loop it back or put it on the air. */
+/* That sequence, end to end: key up, preambles, the link setup frame repeated,
+ * the payload as packet or stream frames, end of transmission, and the tail
+ * flush without which the last chunk of a packet never leaves the radio.
+ *
+ * It lives here rather than in each sender so an SMS burst and an AX.25 burst
+ * cannot drift apart; the bytes it produces are exactly what this file sent
+ * before the split.  The caller owns whatever framing goes inside blk.
+ */
+static void burst_send(uint8_t *blk, int n, M17Type type, uint8_t *meta, int stream)
+{
+    radio_transmit();
+    /* Silence either side of the burst.  The modulator is constant envelope, so
+     * keying straight into a preamble and dropping the carrier straight after
+     * the last frame are both step changes: audible as a click at each end and
+     * splatter either side of the signal.  Zero samples give the DAC somewhere
+     * to start and finish. */
+    radio_silence(5);
+    /* No blank carrier: a constant symbol stream correlates with any sync word,
+     * so the receiver false-locks on it and decodes the silence as an LSF. */
+    for (int i = 0; i < AX25_PREAMBLES; i++)
+        m17_send_preamble();
+    for (int i = 0; i < AX25_LSF_REPEATS; i++)
+        m17_send_link_setup_frame(M17_ADDR_BROADCAST, m17_db_get_src(), type, meta);
+
+    if (stream) {
+        /* The LSF is carried five bytes at a time across six stream frames, so
+         * the burst is padded with zeros to six frames: that completes the link
+         * setup and flushes the decoder in one go. */
+        size_t chunks = (n + 15) / 16;
+        for (size_t i = 0; i < n; i += 16) {
+            uint8_t chunk[16];
+            size_t  take = n - i;
+            memset(chunk, 0, sizeof chunk);
+            if (take > 16)
+                take = 16;
+            memcpy(chunk, &blk[i], take);
+            m17_send_stream_frame(chunk);
+        }
+        int tail = (chunks < 6) ? (int)(6 - chunks) : 2;
+        for (int t = 0; t < tail; t++) {
+            uint8_t zero[16];
+            memset(zero, 0, sizeof zero);
+            m17_send_stream_frame(zero);
+        }
+    } else {
+        /* Packet mode: type byte and frame, chunked into 25-byte packet frames
+         * with the CRC appended by the builder. */
+        m17_send_packet_frames(blk, (int)n);
+    }
+    m17_send_eot();
+    /* Hand over what the modulator and the radio's transmit accumulator are
+     * still holding, and give the last chunk time to go out before the radio is
+     * switched back to receive.  Without this the tail of the last frame in the
+     * burst is never transmitted - which costs a packet its CRC. */
+    radio_silence(20);
+    m17_mod_flush();
+#ifdef HAVE_PLUTO
+    pluto_tx_flush();
+    {   /* samples the radio refused: silent loss otherwise */
+        static long seen;
+        long now = pluto_tx_push_errors();
+        if (now != seen) {
+            printf("m17web: AX.25 transmit lost %ld sample buffers\n", now - seen);
+            fflush(stdout);
+            seen = now;
+        }
+    }
+#endif
+    usleep(60000);
+    radio_receive();
+
+    m_tx_frames++;
+}
+
 static void send_packet(const uint8_t *frame, size_t len)
 {
     static uint8_t scratch[AX25_QUEUE_BYTES];
@@ -666,68 +746,66 @@ static void send_packet(const uint8_t *frame, size_t len)
         n += len;
     }
 
-    radio_transmit();
-    /* Silence either side of the burst.  The modulator is constant envelope, so
-     * keying straight into a preamble and dropping the carrier straight after
-     * the last frame are both step changes: audible as a click at each end and
-     * splatter either side of the signal.  Zero samples give the DAC somewhere
-     * to start and finish. */
-    radio_silence(5);
-    /* No blank carrier: a constant symbol stream correlates with any sync word,
-     * so the receiver false-locks on it and decodes the silence as an LSF. */
-    for (int i = 0; i < AX25_PREAMBLES; i++)
-        m17_send_preamble();
-    for (int i = 0; i < AX25_LSF_REPEATS; i++)
-        m17_send_link_setup_frame(M17_ADDR_BROADCAST, m17_db_get_src(), type, meta);
+    pthread_mutex_lock(&m_burst_lock);
+    burst_send(blk, (int)n, type, meta, m_stream);
+    pthread_mutex_unlock(&m_burst_lock);
+}
 
-    if (m_stream) {
-        /* The LSF is carried five bytes at a time across six stream frames, so
-         * the burst is padded with zeros to six frames: that completes the link
-         * setup and flushes the decoder in one go. */
-        size_t chunks = (n + 15) / 16;
-        for (size_t i = 0; i < n; i += 16) {
-            uint8_t chunk[16];
-            size_t  take = n - i;
-            memset(chunk, 0, sizeof chunk);
-            if (take > 16)
-                take = 16;
-            memcpy(chunk, &blk[i], take);
-            m17_send_stream_frame(chunk);
+/* Put an application block that already carries its M17 data type byte on air
+ * as a packet burst - the SMS sender uses this.  It shares the burst lock with
+ * AX.25, and refuses to key over a voice transmission: voice wins the start,
+ * data wins the finish.
+ *
+ * 0 sent, -1 bad block, -2 the transmitter is busy with voice. */
+int m17_send_app_burst(const uint8_t *app, int n)
+{
+    static uint8_t blk[M17_MAX_APP_BYTES + 4];   /* + the two CRC bytes */
+    uint8_t        meta[M17_META_BYTES];
+    M17Type        type;
+
+    if (app == NULL || n <= 0 || n > M17_MAX_APP_BYTES)
+        return -1;
+
+    if (m_loopback) {
+        /* No radio: build it and reassemble it as the receiver would, then hand
+         * it to the normal packet dispatch - which is what proves the SMS
+         * decoder without touching the transmitter. */
+        m17_pkt_burst    burst;
+        m17_rx_assembler rx;
+        m17_pkt_status   st = M17_PKT_NEED_MORE;
+
+        size_t frames = m17_pkt_build(&burst, app[0], app + 1, (size_t)(n - 1));
+        if (frames > 0) {
+            m17_rx_reset(&rx);
+            for (size_t i = 0; i < frames; i++) {
+                st = m17_rx_chunk(&rx, &burst.frame[i]);
+                if (st != M17_PKT_NEED_MORE)
+                    break;
+            }
         }
-        int tail = (chunks < 6) ? (int)(6 - chunks) : 2;
-        for (int t = 0; t < tail; t++) {
-            uint8_t zero[16];
-            memset(zero, 0, sizeof zero);
-            m17_send_stream_frame(zero);
-        }
-    } else {
-        /* Packet mode: type byte and frame, chunked into 25-byte packet frames
-         * with the CRC appended by the builder. */
-        m17_send_packet_frames(blk, (int)n);
-    }
-    m17_send_eot();
-    /* Hand over what the modulator and the radio's transmit accumulator are
-     * still holding, and give the last chunk time to go out before the radio is
-     * switched back to receive.  Without this the tail of the last frame in the
-     * burst is never transmitted - which costs a packet its CRC. */
-    radio_silence(20);
-    m17_mod_flush();
-#ifdef HAVE_PLUTO
-    pluto_tx_flush();
-    {   /* samples the radio refused: silent loss otherwise */
-        static long seen;
-        long now = pluto_tx_push_errors();
-        if (now != seen) {
-            printf("m17web: AX.25 transmit lost %ld sample buffers\n", now - seen);
+        if (st == M17_PKT_COMPLETE && rx.len > 1) {
+            m_looped++;
+            printf("m17web: LB  SMS %d bytes  (loopback, no radio)\n", (int)rx.len - 1);
+            gui_log_event("lb", "LB  SMS %d bytes loopback (no radio)", (int)rx.len - 1);
             fflush(stdout);
-            seen = now;
+            valid_packet_received(rx.data, rx.len);
+            return 0;
         }
+        m_rejected++;
+        return -1;
     }
-#endif
-    usleep(60000);
-    radio_receive();
 
-    m_tx_frames++;
+    if (m17_txrx_ptt_state() != 0)
+        return -2;
+
+    memcpy(blk, app, (size_t)n);
+    memset(&type, 0, sizeof type);               /* p_s = 0: packet mode */
+    memset(meta, 0, sizeof meta);
+
+    pthread_mutex_lock(&m_burst_lock);
+    burst_send(blk, n, type, meta, 0);
+    pthread_mutex_unlock(&m_burst_lock);
+    return 0;
 }
 
 int m17_ax25_service(void)

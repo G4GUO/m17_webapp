@@ -56,9 +56,11 @@ function handleJson(txt) {
     case 'log': addLog(m.kind, m.line); break;
     case 'resp': addLog('resp', m.line); break;
     case 'help': helpLines = m.lines || []; renderHelp(); break;
+    case 'sms': addSms(m); break;
     case 'clear': $('log').innerHTML = ''; break;
     case 'refs': fillRefs(m.names); break;
     case 'hello':
+      if (m.sms_max) smsMax = m.sms_max;
       checkStamp(m.stamp);
       addLog('info', 'connected to ' + (m.app || 'm17web') + ' (protocol ' + m.proto + ')');
       break;
@@ -856,6 +858,15 @@ function wire() {
 
   if ($('helpsearch')) $('helpsearch').oninput = renderHelp;
 
+  if ($('smssend')) $('smssend').onclick = smsSend;
+  if ($('smsinput')) {
+    $('smsinput').onkeydown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); smsSend(); }
+    };
+    $('smsinput').oninput = smsHint;
+  }
+  smsHint();
+
   $('micgain').oninput = (e) => { $('micgainout').textContent = dbLabel(e.target.value / 100); };
   $('micgain').onchange = (e) => cmd('micgain ' + e.target.value);
   $('spkvol').oninput = (e) => { $('spkvolout').textContent = dbLabel(e.target.value / 100); };
@@ -1182,6 +1193,60 @@ function handleBinary(u8) {
   const pcm = new Int16Array(n);
   for (let i = 0; i < n; i++) pcm[i] = (u8[1 + i * 2] | (u8[2 + i * 2] << 8)) << 16 >> 16;
   if (up) up.push(pcm);
+}
+
+// ---------------------------------------------------------------------------
+// SMS.  Received messages arrive one per event with their time and the station
+// that sent them; the list keeps the last M17_SMS_KEEP so a page opened much
+// later still shows what has been heard.
+let smsMax = 821;
+
+function addSms(m) {
+  const list = $('smslist');
+  if (!list) return;
+  const d = document.createElement('div');
+  d.className = 'sms';
+  const t = document.createElement('span');
+  t.className = 'smst';
+  t.textContent = m.time || '--:--:--';
+  const s = document.createElement('span');
+  s.className = 'smss';
+  s.textContent = m.src || '?';
+  const x = document.createElement('span');
+  x.className = 'smstx';
+  x.textContent = m.text || '';
+  d.appendChild(t);
+  d.appendChild(s);
+  d.appendChild(x);
+  list.insertBefore(d, list.firstChild);
+  while (list.children.length > 32)
+    list.removeChild(list.lastChild);
+  smsCount();
+}
+
+function smsCount() {
+  const n = $('smslist') ? $('smslist').children.length : 0;
+  const c = $('smscount');
+  if (c) c.textContent = n ? n + ' heard' : '';
+}
+
+function smsSend() {
+  const box = $('smsinput');
+  if (!box) return;
+  const text = box.value.trim();
+  if (!text) return;
+  // Its own message type, not a "sms <text>" command: the command line is cut at
+  // 250 characters and a message can be 821.
+  send(JSON.stringify({ t: 'sms', text: text.slice(0, smsMax) }));
+  box.value = '';
+  smsHint();
+}
+
+function smsHint() {
+  const box = $('smsinput'), hint = $('smshint');
+  if (!box || !hint) return;
+  const n = box.value.length;
+  hint.textContent = n ? n + ' / ' + smsMax + ' characters' : smsMax + ' characters maximum';
 }
 
 // ---------------------------------------------------------------------------

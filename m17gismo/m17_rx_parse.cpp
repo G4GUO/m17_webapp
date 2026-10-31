@@ -5,6 +5,7 @@
 #include <stdarg.h>
 #include "m17defines.h"
 #include "m17_ax25.h"
+#include "m17_sms.h"
 
 // Receive-path tracing: build with DIAG=1 (makefile) to enable.
 #ifdef M17WEB_DIAG
@@ -32,6 +33,14 @@ void copy_lich(void){
 	memcpy(m_lsf[1],m_lsf[0],30);
 }
 void valid_packet_received(uint8_t *packet, int len){
+	// The first byte is the M17 application data type (spec table 3.15).  A text
+	// message is the station's own business - it is shown in the web page - so it
+	// is answered here and never reaches the KISS host.  Everything else belongs
+	// to the host, which is why the AX.25 path is unchanged.
+	if( len > 1 && packet[0] == M17_TYPE_SMS ){
+		m17_sms_rx_packet( packet, len );
+		return;
+	}
 	// AX.25 over M17: the payload is a type byte followed by the frame.  The
 	// bridge strips the type byte and hands it to the KISS host; with packet
 	// mode off it does nothing at all.
