@@ -61,10 +61,13 @@ static uint32_t rx_now_ms(void){
     return (uint32_t)(t.tv_sec * 1000 + t.tv_nsec / 1000000);
 }
 
-// out may be NULL, src may be NULL.  Returns false if nothing was heard in the
-// last minute.
+// out may be NULL, src may be NULL.  Returns false only if nothing has ever been
+// heard.  A position only arrives while the other station is transmitting - it
+// rides in the LSF META of its voice frames - so hiding it a minute later threw
+// away the only fix the operator had.  Age is reported separately by
+// gps_rx_age_ms() and the caller decides what counts as stale.
 bool gps_rx_position(GpsMsg *out, char *src, int n){
-    if (!m_rx_gps_ms || (rx_now_ms() - m_rx_gps_ms) > 60000) return false;
+    if (!m_rx_gps_ms) return false;
     if (out) *out = m_rx_gps;
     if (src && n > 0) snprintf(src, n, "%s", m_rx_gps_src);
     return true;
@@ -101,6 +104,7 @@ static void valid_lsf_received(uint48_t src_add, uint48_t dst_add, uint8_t *meta
 	            snprintf(pos, sizeof(pos), "%.5f, %.5f", g.lat, g.lon);
 	            printf("GNSS: %s at %s %s, %d m, %d deg, %.1f km/h\n",
 	                   m_rx_gps_src, pos, grid, (int)g.alt, (int)g.course, g.speed_kmh);
+	            gui_log_event("gps", "GPS  [%s] %s %s", m_rx_gps_src, grid, pos);
 	            fflush(stdout);
 	        }
 	    }

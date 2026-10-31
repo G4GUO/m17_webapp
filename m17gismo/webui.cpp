@@ -398,7 +398,8 @@ static void build_state(char *out, int len) {
                              rsrc, rx.lat, rx.lon, rgrid, (int)rx.alt, rx.speed_kmh, (int)rx.course,
                              gps_rx_age_ms() / 1000.0);
                 // Bearing and distance only mean something with a fix of our own
-                if (gps_fix_fresh(60000)) {
+                // and a position that is still current.
+                if (gps_fix_fresh(60000) && gps_rx_age_ms() < 300000) {
                     o = json_add(out, len, o, ",\"bearing\":%.1f,\"distance_km\":%.2f",
                                  gps_bearing(gps_lat(), gps_lon(), rx.lat, rx.lon),
                                  gps_distance_km(gps_lat(), gps_lon(), rx.lat, rx.lon));

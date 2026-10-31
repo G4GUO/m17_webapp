@@ -78,6 +78,7 @@ body.no-diag #audioerr,
 body.no-diag #farganstat,
 body.no-diag #recstat { display: none; }
 .link { margin-left: auto; padding: .15rem .6rem; border-radius: 1rem; font-size: .8rem; font-weight: 600; }
+.note.gpsstale { opacity: .55; }
 .stale {
   background: rgba(255,176,32,.15); color: var(--amber); border-bottom: 1px solid rgba(255,176,32,.45);
   padding: .4rem .8rem; font-size: .85rem; text-align: center;

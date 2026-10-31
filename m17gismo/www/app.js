@@ -522,12 +522,19 @@ function renderPosition(s) {
   hgn.className = 'val' + (g.tx ? ' live' : '');
 
   // A position heard from another station
+  // A position heard from another station.  Kept on screen after the last frame:
+  // a position heard ten minutes ago still says where that station was, so it is
+  // marked stale rather than thrown away.
   const hd = s.heard, hel = $('heard');
   if (hd && hd.grid) {
+    const age = Number(hd.age_s) || 0;
+    const when = age < 90 ? Math.round(age) + 's ago'
+                          : Math.round(age / 60) + ' min ago';
     hel.style.display = '';
     hel.textContent = 'heard ' + hd.src + ' at ' + hd.grid +
-      ' (' + Number(hd.lat).toFixed(5) + ', ' + Number(hd.lon).toFixed(5) + ', ' +
-      Number(hd.age_s).toFixed(0) + 's ago)';
+      ' (' + Number(hd.lat).toFixed(5) + ', ' + Number(hd.lon).toFixed(5) + ', ' + when + ')' +
+      (age > 300 ? ' \u2014 stale' : '');
+    hel.className = 'note' + (age > 300 ? ' gpsstale' : '');
   } else {
     hel.style.display = 'none';
   }
