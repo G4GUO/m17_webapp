@@ -469,6 +469,13 @@ bool gps_fix_fresh(int max_age_ms) {
     return age <= (uint32_t)max_age_ms;
 }
 
+// Have we ever had a fix?  The position is kept after the lock is lost, so the
+// page can show where the station last was instead of going blank.  Intermittent
+// lock is normal in a poor sky view, and "no fix" hid the only position there was.
+bool gps_have_position(void) {
+    return m_gps.fix_ms != 0;
+}
+
 uint32_t gps_fix_age_ms(void) {
     if (!m_gps.fix_ms) return 0;
     return now_ms() - m_gps.fix_ms;

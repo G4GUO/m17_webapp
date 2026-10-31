@@ -573,6 +573,7 @@ const char *gps_device(void);
 int  gps_baud(void);
 const char *gps_status(void);                     // last open/reopen result
 bool gps_fix_fresh(int max_age_ms);               // valid fix within max_age_ms
+bool gps_have_position(void);                     // a fix has been seen at some point
 uint32_t gps_fix_age_ms(void);                    // age of the last fix, ms
 bool gps_rx_position(GpsMsg *out, char *src, int n);  // last position heard from another station
 double gps_bearing(double lat1, double lon1, double lat2, double lon2);   // degrees true

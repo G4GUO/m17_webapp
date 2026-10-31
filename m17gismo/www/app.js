@@ -497,12 +497,19 @@ function renderMixer(s) {
 function renderPosition(s) {
   const g = s.gps || {};
   const grid = (g.grid || '').trim();
-  $('grid').textContent = (grid && grid !== '--') ? grid : '------';
-  $('latlon').textContent = g.valid
-    ? Number(g.lat).toFixed(5) + ', ' + Number(g.lon).toFixed(5)
+  // A lock that comes and goes should not blank the position: show where the
+  // station last was, with its age, once it is no longer current.
+  const age = g.age_s !== undefined ? Number(g.age_s) : 0;
+  const known = !!(g.valid || (g.has && grid && grid !== '--'));
+  const stale = known && !g.fresh;
+  const ago = age < 90 ? Math.round(age) + 's' : Math.round(age / 60) + ' min';
+  $('grid').textContent = (known && grid && grid !== '--') ? grid : '------';
+  $('latlon').textContent = known
+    ? Number(g.lat).toFixed(5) + ', ' + Number(g.lon).toFixed(5) + (stale ? ' (stale)' : '')
     : 'no fix';
   const bits = [];
-  if (g.valid) {
+  if (stale) bits.push('last fix ' + ago + ' ago');
+  if (known) {
     if (g.sats) bits.push(g.sats + ' satellites');
     if (g.hdop) bits.push('HDOP ' + Number(g.hdop).toFixed(2));
     if (g.alt_m !== undefined) bits.push(g.alt_m + ' m');
@@ -512,10 +519,10 @@ function renderPosition(s) {
   $('gpsdetail').textContent = bits.join(' \u00b7 ') || 'waiting for the GPS...';
   // The same information in the top bar
   const hg = $('hdrgrid');
-  hg.textContent = (grid && grid !== '--') ? grid : '------';
+  hg.textContent = (known && grid && grid !== '--') ? grid : '------';
   hg.className = 'val grid' + (g.fresh ? ' live' : '');
-  $('hdrlatlon').textContent = g.valid
-    ? Number(g.lat).toFixed(5) + ', ' + Number(g.lon).toFixed(5)
+  $('hdrlatlon').textContent = known
+    ? Number(g.lat).toFixed(5) + ', ' + Number(g.lon).toFixed(5) + (stale ? ' (stale)' : '')
     : 'no fix';
   const hgn = $('hdrgnss');
   hgn.textContent = g.tx ? 'sending' : (g.valid ? 'ready' : 'none');

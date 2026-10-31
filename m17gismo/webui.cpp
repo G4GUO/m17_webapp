@@ -407,11 +407,12 @@ static void build_state(char *out, int len) {
                 o = json_add(out, len, o, "}");
             }
         }
-        o = json_add(out, len, o, ",\"gps\":{\"valid\":%s,\"fresh\":%s,\"tx\":%s,\"meta\":%s,\"lat\":%.6f,\"lon\":%.6f,"
+        o = json_add(out, len, o, ",\"gps\":{\"valid\":%s,\"fresh\":%s,\"has\":%s,\"tx\":%s,\"meta\":%s,\"lat\":%.6f,\"lon\":%.6f,"
                      "\"grid\":\"%s\",\"alt_m\":%d,\"speed_kmh\":%.1f,\"course\":%d,\"hdop\":%.2f,"
                      "\"sats\":%d,\"age_s\":%.1f,\"status\":\"%s\","
                      "\"csv\":{\"on\":%s,\"path\":\"%s\",\"rows\":%d,\"interval\":%d}}",
                      m_gps.valid ? "true" : "false", fresh ? "true" : "false",
+                     gps_have_position() ? "true" : "false",
                      m17_tx_gnss() ? "true" : "false",
                      m17_tx_gnss_enabled() ? "true" : "false",
                      m_gps.lat, m_gps.lon, grid, (int)m_gps.alt, m_gps.speed_kmh, (int)m_gps.course,
