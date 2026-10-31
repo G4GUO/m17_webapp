@@ -369,6 +369,7 @@ int pluto_open( uint32_t block_size ){
 	return 0;
 }
 int pluto_start_tx_stream(void){
+	if (m_pluto_running == false || m_ctx == NULL) return -1;
 //	printf("* Initializing AD9361 IIO TX streaming channels\n");
 	FMC_ERROR(get_ad9361_stream_ch(m_ctx, TX, m_tx, 0, &m_tx0_i),"TX chan i not found");
 	FMC_ERROR(get_ad9361_stream_ch(m_ctx, TX, m_tx, 1, &m_tx0_q),"TX chan q not found");
@@ -385,6 +386,11 @@ void pluto_stop_tx_stream(void){
 }
 int pluto_start_rx_stream(void){
 //	printf("* Initializing AD9361 IIO streaming channels\n");
+	/* No radio open: the station stays up and deaf instead of dying.  Without
+	 * this the receive thread calls libiio with a NULL context and the process
+	 * segfaults inside iio_device_find_channel(), which turns a missing Pluto
+	 * into a crash loop and a web page nobody can reach. */
+	if (m_pluto_running == false || m_ctx == NULL) return -1;
 	FMC_ERROR(get_ad9361_stream_ch(m_ctx, RX, m_rx, 0, &m_rx0_i),"RX chan i not found");
 	FMC_ERROR(get_ad9361_stream_ch(m_ctx, RX, m_rx, 1, &m_rx0_q),"RX chan q not found");
 	iio_channel_enable(m_rx0_i);
