@@ -346,6 +346,25 @@ void mmi_parse(char *cmd){
 		}
 	}
 
+	// Reference clock trim.  The value is the measured XO in Hz, so a slow
+	// crystal is below 40000000.  Changing it moves every frequency the chip
+	// generates, so the current LO is re-applied straight afterwards.
+	if(strncmp(token[0],"xo",2)==0){
+		if(nt == 2){
+			long long hz = atoll(token[1]);
+			if(hz > 39000000 && hz < 41000000){
+				const M17_Dbase *db = m17_get_db();
+				pluto_set_xo_correction(hz);
+				radio_set_rx_frequency(db->rx_freq);
+				radio_set_tx_frequency(db->tx_freq);
+				valid = true;
+			}else{
+				gui_cmd_resp("xo: give the measured reference in Hz, e.g. xo 39999086");
+				valid = true;
+			}
+		}
+	}
+
 	// Frequency correction factor
 	if(strncmp(token[0],"fc",2)==0){
 		if(	nt == 2 ){

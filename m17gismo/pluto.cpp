@@ -436,6 +436,28 @@ void pluto_set_tx_freq(long long int freq) {
 	if (!get_lo_chan(m_ctx, TX, &chn)) { return; }
 	wr_ch_lli(chn, "frequency", freq);
 }
+/* Tell the AD9361 what its reference clock actually is.
+ *
+ * It assumes a nominal 40 MHz, and an uncorrected unit is easily 20-50 ppm out -
+ * several kHz at 437 MHz, which no M17 receiver will lock to however healthy
+ * everything else looks.  The value is the MEASURED frequency in Hz, so a slow
+ * crystal is a number BELOW 40000000 and a fast one above.
+ *
+ * It lives in the device's RAM only: a Pluto power cycle forgets it, which is
+ * why the station applies it from config.txt at start-up.
+ */
+int pluto_set_xo_correction(long long int hz)
+{
+    struct iio_device *dev;
+
+    if (m_ctx == NULL)
+        return -1;
+    dev = iio_context_find_device(m_ctx, "ad9361-phy");
+    if (dev == NULL)
+        return -1;
+    return iio_device_attr_write_longlong(dev, "xo_correction", hz);
+}
+
 void pluto_set_rx_freq(long long int freq) {
 	if (m_pluto_running == false) return;
 	struct iio_channel *chn = NULL;

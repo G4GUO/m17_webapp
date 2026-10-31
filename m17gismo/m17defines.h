@@ -201,6 +201,7 @@ void pluto_set_tx_level(double level);
 void pluto_set_rx_level(double level);
 void pluto_apply_rx_level(void);
 void pluto_agc_type(AgcType type);
+int  pluto_set_xo_correction(long long int hz);   /* measured XO in Hz */
 void pluto_set_tx_freq(long long int freq);
 void pluto_set_rx_freq(long long int freq);
 void pluto_get_tx_freq(long long int *freq);
