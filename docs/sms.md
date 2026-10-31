@@ -85,6 +85,28 @@ them a log reads as though the sender's call were the first word of the text.
 There is no listener of any kind: the only ways in are the existing web
 websocket (8080) and the command line.
 
+### Logging what is received
+
+An unattended station's journal rotates, so every received message can also be
+appended to a plain file:
+
+```
+smslog              state, and where it is writing
+smslog on | off     turn it on or off; kept for the next start
+smslog file PATH    write somewhere other than sms.log (in the station's own
+                    directory, next to config.txt)
+```
+
+One line per message, with the date as well as the time because the file outlives
+any one session:
+
+```
+2026-10-31 16:24:21 [G4GUO-2] LOGGED FROM B 1
+```
+
+Off by default.  Sent messages are not logged - the point is a record of what the
+station heard.
+
 ## Web interface
 
 The SMS card sits under the command help: a list above (time, bracketed source,
