@@ -35,8 +35,16 @@ this implementation does not yet use.
 ## Transmit path
 
 `m17_sms_queue()` (m17_sms.cpp) puts the text on a four-deep queue and returns at
-once; a worker thread builds `0x05 + text + NUL` and calls
-`m17_send_app_burst()` in m17_ax25.cpp.  That function:
+once.  `m17_sms_service()` is then called from the **transmitter thread**, next
+to `m17_ax25_service()`, and builds `0x05 + text + NUL` for
+`m17_send_app_burst()` in m17_ax25.cpp.
+
+That placement is not cosmetic: the first version gave SMS a thread of its own
+and the station segfaulted inside the first burst, on both stations, because the
+modulator, the transmit sample buffer and the Pluto's buffers all belong to the
+transmitter thread.  Anything that keys the radio has to run there.
+
+`m17_send_app_burst()`:
 
 * takes the **burst lock** shared with AX.25, so an SMS and a frame can never
   interleave on air;
@@ -57,10 +65,32 @@ the station that sent it, and pushed to every open page as:
 {"t":"sms","time":"15:46:30","src":"G4GUO","text":"LOOPBACK WITH SOURCE"}
 ```
 
+## Headless use
+
+Everything works without a browser:
+
+```
+sms <text>      queue a message; it goes out from the transmitter thread
+sms             list the last five heard, newest first
+```
+
+Received messages print as they arrive, on stdout and in the journal:
+
+```
+m17web: RX  SMS  [G4GUO-2] B TO A ATTEMPT 1
+```
+
+The brackets are there because the callsign is not part of the message - without
+them a log reads as though the sender's call were the first word of the text.
+There is no listener of any kind: the only ways in are the existing web
+websocket (8080) and the command line.
+
 ## Web interface
 
-The SMS card sits under the command help: a list above (time, source, text,
-newest first) and one input line with a send button.  Enter in the box transmits.
+The SMS card sits under the command help: a list above (time, bracketed source,
+text, newest first - five of them) and one input line with a send button.  Enter
+in the box transmits.  The card is warm brown rather than the page's blue, so it
+reads as its own thing.
 The hint counts characters against the streamed limit, which the server sends in
 its greeting as `sms_max`, so the page and the station cannot disagree.
 
