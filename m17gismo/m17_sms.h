@@ -23,8 +23,9 @@
  * rejected: a short message that arrives beats a long one that does not. */
 #define M17_SMS_MAX_TEXT  821
 
-/* How many received messages are kept for the web interface. */
+/* How many received messages are kept, and how many the card shows. */
 #define M17_SMS_KEEP      32
+#define M17_SMS_SHOWN     5
 
 typedef struct {
     char time[16];                    /* HH:MM:SS local, when it was heard */
@@ -56,6 +57,13 @@ int  m17_sms_pending(void);
 int  m17_send_app_burst(const uint8_t *app, int n);
 
 /* Provided by webui.cpp: tell the browser about a message. */
+/* Optional log of everything received, for a station nobody is watching.
+ * Off by default; "smslog on" in config.txt or at the console turns it on. */
+void m17_sms_set_log(int on);
+void m17_sms_set_log_path(const char *p);
+int  m17_sms_log(void);
+const char *m17_sms_log_path(void);
+
 void gui_sms_received(const SmsMsg *m);
 void gui_sms_replay(int id);          /* send the kept messages to one client */
 

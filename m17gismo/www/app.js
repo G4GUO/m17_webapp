@@ -1200,7 +1200,7 @@ function handleBinary(u8) {
 // that sent them; the list keeps the last M17_SMS_KEEP so a page opened much
 // later still shows what has been heard.
 let smsMax = 821;
-const SMS_SHOWN = 5;      // how many messages the card shows; the station keeps more
+const SMS_SHOWN = 5;      // must match M17_SMS_SHOWN in m17_sms.h      // how many messages the card shows; the station keeps more
 
 function addSms(m) {
   const list = $('smslist');

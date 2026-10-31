@@ -545,7 +545,10 @@ void gui_sms_received(const SmsMsg *m) {
 // still shows what has been heard.
 void gui_sms_replay(int id) {
     if (m_srv == NULL) return;
+    // Only what the card will show: sending the whole ring for a page that keeps
+    // five is wasted traffic and would leave the client trimming anyway.
     int n = m17_sms_count();
+    if (n > M17_SMS_SHOWN) n = M17_SMS_SHOWN;
     for (int i = n - 1; i >= 0; i--) {
         const SmsMsg *m = m17_sms_get(i);
         if (m == NULL) continue;

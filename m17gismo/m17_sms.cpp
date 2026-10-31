@@ -29,6 +29,43 @@ static int             m_rx_head;      /* index of the newest entry */
 static int             m_rx_count;
 static pthread_mutex_t m_rx_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* Optional log of everything received.  A station left running with nobody
+ * watching has a journal that rotates; a plain file it can be read from is
+ * easier to keep.  Off unless asked for. */
+static int  m_log_on;
+static char m_log_path[256] = "sms.log";
+static pthread_mutex_t m_log_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void m17_sms_set_log(int on) { m_log_on = on ? 1 : 0; }
+int  m17_sms_log(void)       { return m_log_on; }
+const char *m17_sms_log_path(void) { return m_log_path; }
+
+void m17_sms_set_log_path(const char *p)
+{
+    if (p == NULL || *p == 0) return;
+    snprintf(m_log_path, sizeof m_log_path, "%s", p);
+}
+
+/* One line per message, with the date as well as the time: the file outlives
+ * any one session, and the time alone would be ambiguous the next day. */
+static void log_to_file(const SmsMsg *m)
+{
+    time_t    now = time(NULL);
+    struct tm tm;
+    FILE     *fp;
+
+    if (!m_log_on) return;
+    localtime_r(&now, &tm);
+    pthread_mutex_lock(&m_log_lock);
+    fp = fopen(m_log_path, "a");
+    if (fp != NULL) {
+        fprintf(fp, "%04d-%02d-%02d %s [%s] %s\n",
+                tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, m->time, m->src, m->text);
+        fclose(fp);
+    }
+    pthread_mutex_unlock(&m_log_lock);
+}
+
 /* --------------------------------------------------------------- transmit */
 
 #define SMS_QUEUE 4
@@ -114,6 +151,7 @@ void m17_sms_rx_packet(const uint8_t *data, int len)
         m_rx_count++;
     pthread_mutex_unlock(&m_rx_lock);
 
+    log_to_file(&m);
     gui_sms_received(&m);
 }
 
