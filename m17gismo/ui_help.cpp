@@ -10,6 +10,7 @@ static const char *const help_lines[] = {
 	"rg 0.0 - 1.0    receive gain",
 	"tg 0.0 - 1.0    transmit gain",
 	"fc 0.9 - 1.1    frequency correction factor",
+	"xo NNNNNNNN     Pluto reference clock in Hz (below 40000000 if the carrier is low)",
 	"afc on | off    automatic frequency control",
 	"tx              transmit (PTT on, simplex)",
 	"td              transmit duplex",
