@@ -417,7 +417,6 @@ void *m17_txrx_thread(void *arg){
 				// SMS over M17: one message per pass, sent from this
 				// thread because the modulator and the radio's buffers
 				// belong to it.
-				m17_mailbox_service();
 				if (m17_sms_service())
 				    continue;
 			}

@@ -19,6 +19,7 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <pthread.h>
 
 #include "m17defines.h"
 #include "audio.h"
@@ -58,6 +59,28 @@ static void make_dir(const char *path) {
                                no files and the operator sees it in the log */ }
 }
 
+// The poller runs on its own thread.  Called from the receive loop instead, it
+// only ran when a block of radio samples happened to arrive, so a reply could sit
+// in the outbox for seconds before the station noticed it.
+static void *mailbox_thread(void *arg) {
+    (void)arg;
+    while (true) {
+        m17_mailbox_service();
+        usleep(200 * 1000);
+    }
+    return NULL;
+}
+
+static void start_thread(void) {
+    static bool started;
+    if (started) return;
+    pthread_t t;
+    if (pthread_create(&t, NULL, mailbox_thread, NULL) == 0) {
+        pthread_detach(t);
+        started = true;
+    }
+}
+
 void m17_mailbox_set(const char *inbox, const char *outbox) {
     if (!inbox || !inbox[0]) {
         m_on = false;
@@ -70,6 +93,7 @@ void m17_mailbox_set(const char *inbox, const char *outbox) {
     make_dir(m_inbox);
     make_dir(m_outbox);
     m_on = true;
+    start_thread();
 }
 
 bool m17_mailbox_enabled(void) { return m_on; }
