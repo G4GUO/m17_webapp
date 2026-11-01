@@ -136,6 +136,12 @@ void m17_mailbox_service(void) {
     }
 
     if (m_state == 0) {
+        // Never key while the receiver is still working on an over: transmitting
+        // while receiving loses the rest of what the operator is saying, and the
+        // file that reaches the assistant is a cut-off fragment.  m_recording is
+        // set from signal start and cleared only after the hang time, so this
+        // covers the whole over plus a pause.
+        if (m_recording || m_los_pending) return;
         char path[300];
         if (next_outbox_file(path, sizeof(path))) {
             audio_mic_file_set(path);
