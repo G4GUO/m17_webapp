@@ -39,7 +39,7 @@ static long m_last_audio_ms;         // when decoded audio last arrived
 static long m_rec_start_ms;          // when the current file was opened
 #define MAILBOX_MAX_MS 30000         // longest single over we will record
 static char m_rec_final[300];        // the name the file gets once it is complete
-#define MAILBOX_HANG_MS 3000        // a brief loss of sync is a pause, not the end
+#define MAILBOX_HANG_MS 2000        // a brief loss of sync is a pause, not the end
 
 static int  m_state;                 // 0 idle, 1 keyed and playing, 2 draining
 static char m_playing[300];
