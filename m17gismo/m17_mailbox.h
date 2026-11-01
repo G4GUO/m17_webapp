@@ -19,7 +19,7 @@ void m17_mailbox_set(const char *inbox, const char *outbox);   // "" turns it of
 bool m17_mailbox_enabled(void);
 bool m17_mailbox_busy(void);        // a reply is being transmitted
 
-void m17_mailbox_audio(void);      // decoded audio arrived: record it
+void m17_mailbox_audio(const int16_t *s, int len);   // decoded audio arrived
 void m17_mailbox_aos(void);         // kept for the signal hooks (now advisory)
 void m17_mailbox_los(void);
 void m17_mailbox_service(void);     // poll the outbox

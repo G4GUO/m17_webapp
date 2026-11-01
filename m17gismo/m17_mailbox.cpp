@@ -36,11 +36,14 @@ static char m_rec_path[300];
 static bool m_los_pending;           // unused now, kept for the hooks
 static long m_los_at;
 static long m_last_audio_ms;         // when decoded audio last arrived
+static long m_rec_start_ms;          // when the current file was opened
+#define MAILBOX_MAX_MS 30000         // longest single over we will record
 static char m_rec_final[300];        // the name the file gets once it is complete
 #define MAILBOX_HANG_MS 3000        // a brief loss of sync is a pause, not the end
 
 static int  m_state;                 // 0 idle, 1 keyed and playing, 2 draining
 static char m_playing[300];
+static long m_send_start_ms;
 static struct timespec m_drain_at;
 
 static long mono_ms(void) {
@@ -112,8 +115,20 @@ void m17_mailbox_los(void) {
 // Called as each block of decoded audio is produced.  Starting and finishing on
 // real audio is the only rule that matches all the cases: silence between words,
 // a loss of sync, and a backend that never reports signal start at all.
-void m17_mailbox_audio(void) {
+void m17_mailbox_audio(const int16_t *s, int len) {
     if (!m_on || !m_inbox[0]) return;
+
+    // Only real audio counts.  Noise decoded by a squelched receiver arrives
+    // continuously, and if that keeps resetting the hang the recording never
+    // ends: the file grows, the over is never handed over, and the outbox stops
+    // being polled because the station believes it is still receiving.
+    if (s && len > 0) {
+        long sum = 0;
+        for (int i = 0; i < len; i++) sum += (long)s[i] * s[i];
+        double mean_square = (double)sum / len;
+        if (mean_square < 3600.0) return;    // below about -55 dBFS: noise
+    }
+
     if (!m_recording) {
         if (rec_active()) return;           // somebody is recording already
         // Write to a .part name and rename when the file is complete.  A reader
@@ -126,11 +141,24 @@ void m17_mailbox_audio(void) {
         // Let the recorder take the rate from the samples themselves.
         rec_autostart(m_rec_path);
         m_recording = true;
+        m_rec_start_ms = mono_ms();
         m_last_audio_ms = mono_ms();
         printf("mailbox: recording -> %s (t=%ld)\n", m_rec_final, mono_ms() % 1000000);
         fflush(stdout);
     }
     m_last_audio_ms = mono_ms();
+    if (m_recording && mono_ms() - m_rec_start_ms > MAILBOX_MAX_MS) {
+        // Runaway recording (a stuck carrier): finish the file so the rest of the
+        // mailbox keeps working rather than blocking on it for ever.
+        rec_stop();
+        if (m_rec_final[0] && rename(m_rec_path, m_rec_final) == 0) {
+            snprintf(m_rec_path, sizeof(m_rec_path), "%s", m_rec_final);
+        }
+        m_rec_final[0] = 0;
+        m_recording = false;
+        printf("mailbox: over written (length limit) %s\n", m_rec_path);
+        fflush(stdout);
+    }
 }
 
 // The next file to send: ".raw" only, since that is what the microphone source
@@ -183,6 +211,7 @@ void m17_mailbox_service(void) {
             audio_mic_file_set(path);
             snprintf(m_playing, sizeof(m_playing), "%s", path);
             m17_txrx_ptt_on();
+            m_send_start_ms = mono_ms();
             m_state = 1;
             printf("mailbox: sending %s\n", path);
             fflush(stdout);
@@ -191,9 +220,17 @@ void m17_mailbox_service(void) {
     }
 
     if (m_state == 1) {
-        // The transmit loop unkeys itself at end of file; wait for that to settle
-        // before dropping the clip, or it would be deleted mid-over.
-        if (audio_mic_file_eof()) {
+        // The transmitter unkeys itself at end of file.  Watch the transmitter
+        // rather than the file flag: the flag can be reset by the microphone-open
+        // path and then the station believes it is still playing for ever, which
+        // leaves the clip in the outbox and blocks every later reply.
+        bool done = audio_mic_file_eof() || m17_txrx_ptt_state() == 0;
+        if (done) {
+            clock_gettime(CLOCK_MONOTONIC, &m_drain_at);
+            m_state = 2;
+        } else if (mono_ms() - m_send_start_ms > 120000) {
+            printf("mailbox: giving up on %s after two minutes\n", m_playing);
+            fflush(stdout);
             clock_gettime(CLOCK_MONOTONIC, &m_drain_at);
             m_state = 2;
         }
