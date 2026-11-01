@@ -32,8 +32,9 @@ static char m_outbox[256];
 
 static bool m_recording;
 static char m_rec_path[300];
-static bool m_los_pending;           // sync was lost; the over ends after a hang
+static bool m_los_pending;           // unused now, kept for the hooks
 static long m_los_at;
+static long m_last_audio_ms;         // when decoded audio last arrived
 #define MAILBOX_HANG_MS 3000        // a brief loss of sync is a pause, not the end
 
 static int  m_state;                 // 0 idle, 1 keyed and playing, 2 draining
@@ -74,31 +75,31 @@ bool m17_mailbox_enabled(void) { return m_on; }
 bool m17_mailbox_busy(void) { return m_state != 0; }
 
 void m17_mailbox_aos(void) {
-    if (!m_on || !m_inbox[0]) return;
-    // Sync came back inside the hang time: this is one over, keep recording it.
-    m_los_pending = false;
-    if (m_recording) return;
-    if (rec_active()) return;               // somebody is already recording
-    snprintf(m_rec_path, sizeof(m_rec_path), "%s/over-%ld.wav", m_inbox, (long)time(NULL));
-    // The neural receiver pushes its own 16 kHz output into a recording, and the
-    // recorder ignores samples whose rate is not the one it opened with - so the
-    // file must be opened at whatever the decoder is actually producing, or it
-    // fills with a header and nothing else.
-    int rate = fargan_rx_enabled() ? 16000 : 8000;
-    if (rec_start(m_rec_path, rate)) {
-        m_recording = true;
-        printf("mailbox: receiving into %s\n", m_rec_path);
-        fflush(stdout);
-    }
+    // Advisory only: recording follows the decoded audio, not the signal state.
+    // Signal-start does not always arrive (the simulator never sends it) and a
+    // brief loss of sync used to end the file early.
 }
 
 void m17_mailbox_los(void) {
-    if (!m_recording) return;
-    // The receiver loses sync between words and across a pause.  Ending the file
-    // on every loss turned one over into a handful of fragments, none of them long
-    // enough to transcribe - so wait, and only finish if nothing comes back.
-    m_los_pending = true;
-    m_los_at = mono_ms();
+    // Advisory only: see m17_mailbox_aos().
+}
+
+// Called as each block of decoded audio is produced.  Starting and finishing on
+// real audio is the only rule that matches all the cases: silence between words,
+// a loss of sync, and a backend that never reports signal start at all.
+void m17_mailbox_audio(void) {
+    if (!m_on || !m_inbox[0]) return;
+    if (!m_recording) {
+        if (rec_active()) return;           // somebody is recording already
+        snprintf(m_rec_path, sizeof(m_rec_path), "%s/over-%ld.wav", m_inbox,
+                 (long)time(NULL));
+        int rate = fargan_rx_enabled() ? 16000 : 8000;
+        if (!rec_start(m_rec_path, rate)) return;
+        m_recording = true;
+        printf("mailbox: recording %s (t=%ld)\n", m_rec_path, mono_ms() % 1000000);
+        fflush(stdout);
+    }
+    m_last_audio_ms = mono_ms();
 }
 
 // The next file to send: ".raw" only, since that is what the microphone source
@@ -127,11 +128,11 @@ static bool next_outbox_file(char *out, size_t len) {
 void m17_mailbox_service(void) {
     if (!m_on) return;
 
-    if (m_recording && m_los_pending && mono_ms() - m_los_at >= MAILBOX_HANG_MS) {
+    if (m_recording && mono_ms() - m_last_audio_ms >= MAILBOX_HANG_MS) {
         rec_stop();
         m_recording = false;
         m_los_pending = false;
-        printf("mailbox: over written to %s\n", m_rec_path);
+        printf("mailbox: over written to %s (t=%ld)\n", m_rec_path, mono_ms() % 1000000);
         fflush(stdout);
     }
 
@@ -141,7 +142,7 @@ void m17_mailbox_service(void) {
         // file that reaches the assistant is a cut-off fragment.  m_recording is
         // set from signal start and cleared only after the hang time, so this
         // covers the whole over plus a pause.
-        if (m_recording || m_los_pending) return;
+        if (m_recording) return;
         char path[300];
         if (next_outbox_file(path, sizeof(path))) {
             audio_mic_file_set(path);

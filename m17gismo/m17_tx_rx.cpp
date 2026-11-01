@@ -186,6 +186,7 @@ void m17_txrx_spkr_audio( uint8_t *data ){
          // FARGAN's own 16 kHz output: that is the resolution it synthesised at,
          // and decimating it only throws information away.
          rec_push(block16, 320, 16000);
+         m17_mailbox_audio();
          audio_output(block8, m_nsam);
          return;
       }
@@ -198,6 +199,7 @@ void m17_txrx_spkr_audio( uint8_t *data ){
    codec2_decode(m_codec2, m_aspksamples, data);
    memcpy(last, m_aspksamples, sizeof(int16_t) * (m_nsam < 320 ? m_nsam : 320));
    rec_push(m_aspksamples, m_nsam, 8000);      // the classic decoder is 8 kHz
+   m17_mailbox_audio();
    audio_output(m_aspksamples, m_nsam);
 }
 
