@@ -32,6 +32,9 @@ static char m_outbox[256];
 
 static bool m_recording;
 static char m_rec_path[300];
+static bool m_los_pending;           // sync was lost; the over ends after a hang
+static long m_los_at;
+#define MAILBOX_HANG_MS 3000        // a brief loss of sync is a pause, not the end
 
 static int  m_state;                 // 0 idle, 1 keyed and playing, 2 draining
 static char m_playing[300];
@@ -71,7 +74,10 @@ bool m17_mailbox_enabled(void) { return m_on; }
 bool m17_mailbox_busy(void) { return m_state != 0; }
 
 void m17_mailbox_aos(void) {
-    if (!m_on || !m_inbox[0] || m_recording) return;
+    if (!m_on || !m_inbox[0]) return;
+    // Sync came back inside the hang time: this is one over, keep recording it.
+    m_los_pending = false;
+    if (m_recording) return;
     if (rec_active()) return;               // somebody is already recording
     snprintf(m_rec_path, sizeof(m_rec_path), "%s/over-%ld.wav", m_inbox, (long)time(NULL));
     // The neural receiver pushes its own 16 kHz output into a recording, and the
@@ -88,10 +94,11 @@ void m17_mailbox_aos(void) {
 
 void m17_mailbox_los(void) {
     if (!m_recording) return;
-    rec_stop();
-    m_recording = false;
-    printf("mailbox: over written to %s\n", m_rec_path);
-    fflush(stdout);
+    // The receiver loses sync between words and across a pause.  Ending the file
+    // on every loss turned one over into a handful of fragments, none of them long
+    // enough to transcribe - so wait, and only finish if nothing comes back.
+    m_los_pending = true;
+    m_los_at = mono_ms();
 }
 
 // The next file to send: ".raw" only, since that is what the microphone source
@@ -119,6 +126,14 @@ static bool next_outbox_file(char *out, size_t len) {
 
 void m17_mailbox_service(void) {
     if (!m_on) return;
+
+    if (m_recording && m_los_pending && mono_ms() - m_los_at >= MAILBOX_HANG_MS) {
+        rec_stop();
+        m_recording = false;
+        m_los_pending = false;
+        printf("mailbox: over written to %s\n", m_rec_path);
+        fflush(stdout);
+    }
 
     if (m_state == 0) {
         char path[300];
