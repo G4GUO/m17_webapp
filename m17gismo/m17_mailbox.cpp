@@ -23,6 +23,7 @@
 #include "m17defines.h"
 #include "audio.h"
 #include "recorder.h"
+#include "fargan.h"
 #include "m17_mailbox.h"
 
 static bool m_on;
@@ -73,7 +74,12 @@ void m17_mailbox_aos(void) {
     if (!m_on || !m_inbox[0] || m_recording) return;
     if (rec_active()) return;               // somebody is already recording
     snprintf(m_rec_path, sizeof(m_rec_path), "%s/over-%ld.wav", m_inbox, (long)time(NULL));
-    if (rec_start(m_rec_path, 8000)) {
+    // The neural receiver pushes its own 16 kHz output into a recording, and the
+    // recorder ignores samples whose rate is not the one it opened with - so the
+    // file must be opened at whatever the decoder is actually producing, or it
+    // fills with a header and nothing else.
+    int rate = fargan_rx_enabled() ? 16000 : 8000;
+    if (rec_start(m_rec_path, rate)) {
         m_recording = true;
         printf("mailbox: receiving into %s\n", m_rec_path);
         fflush(stdout);
