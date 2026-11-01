@@ -354,9 +354,13 @@ void mmi_parse(char *cmd){
 			long long hz = atoll(token[1]);
 			if(hz > 39000000 && hz < 41000000){
 				const M17_Dbase *db = m17_get_db();
+				char line[48];
 				pluto_set_xo_correction(hz);
 				radio_set_rx_frequency(db->rx_freq);
 				radio_set_tx_frequency(db->tx_freq);
+				// The chip forgets this at power-off, so keep it for the next start.
+				snprintf(line, sizeof(line), "xo %lld", hz);
+				save_line_to_config("xo", line);
 				valid = true;
 			}else{
 				gui_cmd_resp("xo: give the measured reference in Hz, e.g. xo 39999086");
