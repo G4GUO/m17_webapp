@@ -85,12 +85,19 @@ function applyState(s) {
   const led = $('pttled');
   // State the direction, not just the state: "TX" alone leaves you guessing
   // whether a burst you can hear is yours or the other station's.
-  const txing = (s.ptt === 'TX');
+  // 'CA' is the carrier mode ('tc'): the radio is keyed and radiating, so it
+  // must not read RX - that made an on-air carrier look like a dead transmitter
+  // and sent us hunting for a fault that was not there.  Name it, because a
+  // carrier has no destination and no audio.
+  const carrier = (s.ptt === 'CA');
+  const txing = (s.ptt === 'TX' || carrier);
   const peer = (s.dst || '').trim();
   const heard = (s.rx_src || '').trim();
-  led.textContent = txing
-    ? ('TX' + (peer ? ' \u2192 ' + peer : ''))
-    : (s.ptt === 'DX' ? 'DX' : 'RX');
+  led.textContent = carrier
+    ? 'TX carrier'
+    : txing
+      ? ('TX' + (peer ? ' \u2192 ' + peer : ''))
+      : (s.ptt === 'DX' ? 'DX' : 'RX');
   led.className = 'led' + (txing ? ' tx' : s.ptt === 'DX' ? ' dx' : '');
 
   // The station being received belongs here, not in the callsign box.  While

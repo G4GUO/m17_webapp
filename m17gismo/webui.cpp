@@ -226,7 +226,9 @@ static void build_state(char *out, int len) {
         clock_gettime(CLOCK_MONOTONIC, &ts);
         long long now = (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
         int in_frame_now = (m_in_frame || db->in_frame) ? 1 : 0;
-        if (ptt_now[0] == 'T') { snprintf(m_act, sizeof m_act, "TX"); m_act_ms = now; }
+        // 'CA' is a keyed carrier: still activity, and the interface should not
+        // claim the station is idle while it is radiating.
+        if (ptt_now[0] == 'T' || ptt_now[0] == 'C') { snprintf(m_act, sizeof m_act, "TX"); m_act_ms = now; }
         else if (in_frame_now) { snprintf(m_act, sizeof m_act, "RX"); m_act_ms = now; }
         long long age = now - m_act_ms;
         if (age > 6000 || !m_act[0]) { m_act[0] = 0; age = -1; }
