@@ -35,6 +35,7 @@ static char m_rec_path[300];
 static bool m_los_pending;           // unused now, kept for the hooks
 static long m_los_at;
 static long m_last_audio_ms;         // when decoded audio last arrived
+static char m_rec_final[300];        // the name the file gets once it is complete
 #define MAILBOX_HANG_MS 3000        // a brief loss of sync is a pause, not the end
 
 static int  m_state;                 // 0 idle, 1 keyed and playing, 2 draining
@@ -91,12 +92,17 @@ void m17_mailbox_audio(void) {
     if (!m_on || !m_inbox[0]) return;
     if (!m_recording) {
         if (rec_active()) return;           // somebody is recording already
-        snprintf(m_rec_path, sizeof(m_rec_path), "%s/over-%ld.wav", m_inbox,
-                 (long)time(NULL));
+        // Write to a .part name and rename when the file is complete.  A reader
+        // watching the directory must never see a half-written WAV: the header
+        // still says zero frames, so it looks like a silent, cut-off over, and
+        // transcribing the fragment produces confident nonsense.
+        long now = (long)time(NULL);
+        snprintf(m_rec_final, sizeof(m_rec_final), "%s/over-%ld.wav", m_inbox, now);
+        snprintf(m_rec_path, sizeof(m_rec_path), "%s/over-%ld.part", m_inbox, now);
         int rate = fargan_rx_enabled() ? 16000 : 8000;
         if (!rec_start(m_rec_path, rate)) return;
         m_recording = true;
-        printf("mailbox: recording %s (t=%ld)\n", m_rec_path, mono_ms() % 1000000);
+        printf("mailbox: recording -> %s (t=%ld)\n", m_rec_final, mono_ms() % 1000000);
         fflush(stdout);
     }
     m_last_audio_ms = mono_ms();
@@ -129,7 +135,11 @@ void m17_mailbox_service(void) {
     if (!m_on) return;
 
     if (m_recording && mono_ms() - m_last_audio_ms >= MAILBOX_HANG_MS) {
-        rec_stop();
+        rec_stop();                          // writes the real sizes and closes
+        if (m_rec_final[0] && rename(m_rec_path, m_rec_final) == 0) {
+            snprintf(m_rec_path, sizeof(m_rec_path), "%s", m_rec_final);
+        }
+        m_rec_final[0] = 0;
         m_recording = false;
         m_los_pending = false;
         printf("mailbox: over written to %s (t=%ld)\n", m_rec_path, mono_ms() % 1000000);
