@@ -201,6 +201,8 @@ const char *audio_pulse_error(void);
 void audio_web_mic_open(void);
 void audio_web_mic_close(void);
 void audio_web_spk_open(void);
+long audio_web_spk_samples(void);      // samples handed to web clients
+bool audio_web_spk_is_open(void);      // whether the web speaker is attached
 void audio_web_spk_close(void);
 void audio_web_mic_push(const int16_t *s, int len);   // from the WebSocket client
 int  audio_web_mic_available(void);

@@ -60,6 +60,8 @@ static void *m_srv;
 static int   m_srv_ok;
 
 static char  m_ptt[4]   = "RX";
+static long  m_spk_sent;       // frames handed to web audio clients
+static int   m_spk_clients;    // how many received the last frame
 
 /* Last activity, latched.  State is pushed about once a second and an AX.25
  * burst is 200 ms, so a live flag would usually be sampled between bursts and
@@ -444,6 +446,10 @@ static void build_state(char *out, int len) {
     // it", and these two numbers can.
     o = json_add(out, len, o, ",\"mic_in\":{\"msgs\":%ld,\"peak\":%.3f,\"age_ms\":%ld}",
                  audio_web_mic_messages(), audio_web_mic_peak(), audio_web_mic_age_ms());
+    o = json_add(out, len, o, ",\"spk_out\":{\"open\":%s,\"samples\":%ld,\"frames_sent\":%ld,"
+                 "\"last_clients\":%d,\"route\":\"%s\"}",
+                 audio_web_spk_is_open() ? "true" : "false", audio_web_spk_samples(),
+                 m_spk_sent, m_spk_clients, audio_route_name(audio_get_route(true)));
     o = json_add(out, len, o, ",\"clients\":%d", m_srv ? ws_client_count(m_srv) : 0);
     o = json_add(out, len, o, ",\"phone_clients\":%d", m_srv ? ws_count_role(m_srv, "phone") : 0);
     o = json_add(out, len, o, ",\"refs\":%d", m_refs_count);
@@ -819,8 +825,9 @@ void webui_audio_to_browser(const int16_t *s, int len) {
         if (chunk > maxsamples) chunk = maxsamples;
         buf[0] = AUDIO_TAG_SPK;
         memcpy(buf + 1, s + off, (size_t)chunk * 2);
-        if (only) ws_broadcast_bin_role(m_srv, only, buf, 1 + chunk * 2);
-        else      ws_broadcast_bin(m_srv, buf, 1 + chunk * 2);
+        if (only) m_spk_clients = ws_broadcast_bin_role(m_srv, only, buf, 1 + chunk * 2);
+        else      m_spk_clients = ws_broadcast_bin(m_srv, buf, 1 + chunk * 2);
+        m_spk_sent++;
         off += chunk;
     }
 }

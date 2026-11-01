@@ -63,6 +63,10 @@ void audio_web_mic_close(void) {
     pthread_mutex_unlock(&m_mtx);
 }
 
+long audio_web_spk_samples(void) { return m_spk_frames; }
+
+bool audio_web_spk_is_open(void) { return m_spk_active; }
+
 void audio_web_spk_open(void) {
     pthread_mutex_lock(&m_mtx);
     m_spk_active = true;
