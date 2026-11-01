@@ -444,8 +444,13 @@ static void build_state(char *out, int len) {
     // What arrived from the client, separately from what the modulator got: the
     // VU meter cannot tell "the phone is silent" from "the station is not using
     // it", and these two numbers can.
-    o = json_add(out, len, o, ",\"mic_in\":{\"msgs\":%ld,\"peak\":%.3f,\"age_ms\":%ld}",
-                 audio_web_mic_messages(), audio_web_mic_peak(), audio_web_mic_age_ms());
+    // "starved" is the number that explains broken transmit audio: samples the
+    // transmitter had to fill with silence because the client's frames had not
+    // arrived yet.  Anything above zero is an audible hole.
+    o = json_add(out, len, o, ",\"mic_in\":{\"msgs\":%ld,\"peak\":%.3f,\"age_ms\":%ld,"
+                 "\"starved\":%ld,\"buffered\":%d}",
+                 audio_web_mic_messages(), audio_web_mic_peak(), audio_web_mic_age_ms(),
+                 audio_web_mic_starved(), audio_web_mic_available());
     o = json_add(out, len, o, ",\"spk_out\":{\"open\":%s,\"samples\":%ld,\"frames_sent\":%ld,"
                  "\"last_clients\":%d,\"route\":\"%s\"}",
                  audio_web_spk_is_open() ? "true" : "false", audio_web_spk_samples(),
