@@ -746,7 +746,9 @@ static void web_on_msg(int id, int is_binary, const uint8_t *data, int len, void
             // else; the browser route keeps taking it from any client, which is
             // what it has always done.
             const char *role = ws_client_role(m_srv, id);
-            if (audio_get_route(false) == AROUTE_PHONE && strcmp(role, "phone") != 0) return;
+            AudioRoute rin = audio_get_route(false);
+            if (rin == AROUTE_PHONE && strcmp(role, "phone") != 0) return;
+            if (rin == AROUTE_AI && strcmp(role, "ai") != 0) return;
             int n = (len - 1) / 2;
             m_last_mic_ms = now_ms();
             audio_web_mic_push((const int16_t *)(data + 1), n);
@@ -807,7 +809,8 @@ void webui_audio_to_browser(const int16_t *s, int len) {
     if (ws_client_count(m_srv) == 0) return;
     // With the phone route the audio belongs to the phone alone, so a page open
     // on the desk can be the control surface without also being the speaker.
-    const char *only = (audio_get_route(true) == AROUTE_PHONE) ? "phone" : NULL;
+    AudioRoute rout = audio_get_route(true);
+    const char *only = (rout == AROUTE_PHONE) ? "phone" : (rout == AROUTE_AI ? "ai" : NULL);
     static uint8_t buf[1 + 2048];
     int maxsamples = (int)(sizeof(buf) - 1) / 2;
     int off = 0;
@@ -878,14 +881,38 @@ void gui_update_clear(void) {
     if (m_srv) ws_broadcast_text(m_srv, "{\"t\":\"clear\"}");
 }
 
+// An agent client needs to know when someone starts and stops transmitting, so it
+// can open a capture, transcribe, and stay quiet otherwise.  The page ignores
+// message types it does not know, so this is safe to broadcast.
+static void signal_notice(int on, const char *src) {
+    char msg[200];
+    if (!m_srv) return;
+    if (on) {
+        char call[16] = "";
+        if (src && src[0]) {
+            const char *q = src;
+            size_t k = 0;
+            while (*q && *q != ' ' && k < sizeof(call) - 1) call[k++] = *q++;
+            call[k] = 0;
+        }
+        snprintf(msg, sizeof(msg), "{\"t\":\"sig\",\"on\":1,\"src\":\"%s\",\"rate\":8000}", call);
+    } else {
+        snprintf(msg, sizeof(msg), "{\"t\":\"sig\",\"on\":0}");
+    }
+    ws_broadcast_text(m_srv, msg);
+}
+
 void gui_los(void) {
     m_in_frame = false;
     log_send("rx", "loss of signal");
+    signal_notice(0, NULL);
     push_state();
 }
 
 void gui_aos(void) {
+    const M17_Dbase *db = m17_get_db();
     m_in_frame = true;
+    signal_notice(1, (db && db->rx_src_add[0]) ? db->rx_src_add : NULL);
     push_state();
 }
 

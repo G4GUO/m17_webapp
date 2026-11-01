@@ -42,6 +42,10 @@ typedef enum {
                        // that connected with ?client=phone.  Lets the desk page
                        // be the control surface while the phone is the mic and
                        // the speaker.
+    AROUTE_AI,         // the agent: a client that connected with ?client=ai.
+                       // It owns the microphone and the speaker outright, so an
+                       // assistant can talk and listen without a sound card and
+                       // without stealing audio from the desk page.
     AROUTE_CARD,       // the Pi's sound card, direct through ALSA
     AROUTE_BT,         // the Bluetooth device chosen in "Configure Bluetooth"
     AROUTE_PULSE       // the Pi's sound card through PulseAudio (console only)
