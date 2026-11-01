@@ -5,6 +5,7 @@
 #include <math.h>
 #include "m17defines.h"
 #include "m17_ax25.h"
+#include "m17_mailbox.h"
 #include "m17_sms.h"
 #include "audio.h"
 #include "bluetooth.h"
@@ -576,6 +577,26 @@ void mmi_parse(char *cmd){
 			gui_cmd_resp(text);
 			valid = true;
 		}
+	}
+
+	/* The AI link as two directories: the receiver records each over into the
+	 * inbox, and anything that appears in the outbox is transmitted and removed.
+	 * Nothing depends on a socket staying open. */
+	if(strncmp(token[0],"mailbox",7) == 0 && nt >= 2){
+		if(strcasecmp(token[1],"off") == 0){
+			m17_mailbox_set("", "");
+			gui_cmd_resp("mailbox: off");
+		} else {
+			const char *out = (nt >= 3) ? token[2] : NULL;
+			char line[400];
+			m17_mailbox_set(token[1], out);
+			snprintf(line, sizeof(line), "mailbox: inbox %s, outbox %s", token[1],
+			         out ? out : token[1]);
+			gui_cmd_resp(line);
+			snprintf(line, sizeof(line), "mailbox %s %s", token[1], out ? out : token[1]);
+			save_line_to_config("mailbox", line);
+		}
+		valid = true;
 	}
 
 	/* Play a prepared clip through the transmitter.  The station reads the file

@@ -13,6 +13,8 @@ static const char *const help_lines[] = {
 	"xo NNNNNNNN     Pluto reference clock in Hz (below 40000000 if the carrier is low)",
 	"micfile PATH    transmit a raw 8 kHz s16le file; the station reads it itself",
 	"micfile off     microphone back to the configured route",
+	"mailbox IN OUT  AI mailboxes: record overs to IN, transmit files in OUT",
+	"mailbox off     AI mailboxes off",
 	"afc on | off    automatic frequency control",
 	"tx              transmit (PTT on, simplex)",
 	"td              transmit duplex",
