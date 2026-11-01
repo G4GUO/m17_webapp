@@ -532,13 +532,24 @@ void mmi_parse(char *cmd){
 	if(strncmp(token[0],"mode",4) == 0 ){
 		CircuitType want = m17_db_get_chan_type();
 		bool known = true;
-		if(strncmp(token[1],"loop",4) == 0)        want = ASTOAS;
+		if(nt < 2){
+			// A bare "mode" asks which mode is running.  Without this guard the
+			// handler handed a NULL token to strncmp() below and the whole station
+			// segfaulted - a query bringing the radio down.
+			gui_cmd_resp(want == ASTOAS  ? "mode loop"   :
+			             want == DRTODN   ? "mode gate"   :
+			             want == ASTODN   ? "mode client" : "mode radio");
+			valid = true;
+		}
+		else if(strncmp(token[1],"loop",4) == 0)        want = ASTOAS;
 		else if(strncmp(token[1],"radio",5) == 0)  want = DRTOAS;
 		else if(strncmp(token[1],"gate",4) == 0)   want = DRTODN;
 		else if(strncmp(token[1],"client",6) == 0) want = ASTODN;
 		else known = false;
 
-		if(!known){
+		if(nt < 2){
+			/* already answered above */
+		} else if(!known){
 			gui_cmd_resp("mode: radio, loop, gate or client");
 			valid = true;
 		} else {
