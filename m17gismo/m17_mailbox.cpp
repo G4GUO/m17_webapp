@@ -99,9 +99,10 @@ void m17_mailbox_audio(void) {
         long now = (long)time(NULL);
         snprintf(m_rec_final, sizeof(m_rec_final), "%s/over-%ld.wav", m_inbox, now);
         snprintf(m_rec_path, sizeof(m_rec_path), "%s/over-%ld.part", m_inbox, now);
-        int rate = fargan_rx_enabled() ? 16000 : 8000;
-        if (!rec_start(m_rec_path, rate)) return;
+        // Let the recorder take the rate from the samples themselves.
+        rec_autostart(m_rec_path);
         m_recording = true;
+        m_last_audio_ms = mono_ms();
         printf("mailbox: recording -> %s (t=%ld)\n", m_rec_final, mono_ms() % 1000000);
         fflush(stdout);
     }

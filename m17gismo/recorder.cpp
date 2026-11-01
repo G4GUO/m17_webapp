@@ -157,9 +157,29 @@ void rec_stop(void)
     pthread_mutex_unlock(&s_lock);
 }
 
+static char s_auto[256];               /* pending automatic recording */
+
+void rec_autostart(const char *path)
+{
+    pthread_mutex_lock(&s_lock);
+    snprintf(s_auto, sizeof(s_auto), "%s", path ? path : "");
+    pthread_mutex_unlock(&s_lock);
+}
+
 void rec_push(const int16_t *samples, int count, int rate)
 {
     if (count <= 0) return;
+
+    /* Automatic recording opens with the rate of the first real samples.  Done
+     * before taking the lock, because rec_start() takes it. */
+    if (s_auto[0] && !rec_active()) {
+        char path[256];
+        pthread_mutex_lock(&s_lock);
+        snprintf(path, sizeof(path), "%s", s_auto);
+        s_auto[0] = 0;
+        pthread_mutex_unlock(&s_lock);
+        rec_start(path, rate);
+    }
 
     pthread_mutex_lock(&s_lock);
     if (s_f) {

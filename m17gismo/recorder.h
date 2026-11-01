@@ -25,6 +25,12 @@ bool rec_active(void);
 // directory.  Returns false on failure; rec_error() says why.
 bool rec_start(const char *path, int rate);
 
+/* Open the file at the rate of the first samples that arrive.  A caller cannot
+ * know whether the decoder is about to push 8 kHz or 16 kHz, and rec_push()
+ * silently drops samples at the wrong rate - so the rate is taken from the push
+ * itself rather than guessed. */
+void rec_autostart(const char *path);
+
 // Stop and close it.  Safe to call when nothing is recording.
 void rec_stop(void);
 
