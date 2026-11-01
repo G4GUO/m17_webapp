@@ -218,6 +218,14 @@ bool audio_web_active(void);
 // WebSocket sink used by the browser back end, implemented in webui.cpp
 void webui_audio_to_browser(const int16_t *s, int len);
 
+// ---- Microphone from a prepared clip -------------------------------------
+// Play a raw 8 kHz s16le file through the transmitter.  The station reads it at
+// its own pace, so there is no network timing to get wrong: no starving the
+// vocoder and no overflowing its ring.
+void audio_mic_file_set(const char *path);      // "" turns it off
+bool audio_mic_file_active(void);
+bool audio_mic_file_eof(void);
+
 // ---- File back end (audio_file.cpp) --------------------------------------
 void audio_file_set(const char *in_path, const char *out_path);
 void audio_file_mic_open(void);

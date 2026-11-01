@@ -11,6 +11,8 @@ static const char *const help_lines[] = {
 	"tg 0.0 - 1.0    transmit gain",
 	"fc 0.9 - 1.1    frequency correction factor",
 	"xo NNNNNNNN     Pluto reference clock in Hz (below 40000000 if the carrier is low)",
+	"micfile PATH    transmit a raw 8 kHz s16le file; the station reads it itself",
+	"micfile off     microphone back to the configured route",
 	"afc on | off    automatic frequency control",
 	"tx              transmit (PTT on, simplex)",
 	"td              transmit duplex",

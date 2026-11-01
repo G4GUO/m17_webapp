@@ -306,6 +306,9 @@ void *m17_txrx_thread(void *arg){
 			    if (m17_tx_lich_index() == 0) m17_tx_meta_from_gps(false);
 			    // Send Sub frame
 			    m17_send_stream_frame( payload );
+			    // A clip played from a file ends where the file ends: no timing
+			    // guesswork about how long to hold the transmitter up.
+			    if (audio_mic_file_active() && audio_mic_file_eof()) m_ptt = PTT_RX;
 #ifdef M17WEB_DIAG
 			    clock_gettime(CLOCK_MONOTONIC, &d3);
 #endif
@@ -371,6 +374,9 @@ void *m17_txrx_thread(void *arg){
 			    if (m17_tx_lich_index() == 0) m17_tx_meta_from_gps(false);
 			    // Send Sub frame
 			    m17_send_stream_frame( payload );
+			    // A clip played from a file ends where the file ends: no timing
+			    // guesswork about how long to hold the transmitter up.
+			    if (audio_mic_file_active() && audio_mic_file_eof()) m_ptt = PTT_RX;
 			    // A pending audio change is applied *before* the next
 			    // transmission, never here: closing a bluealsa PCM in the
 			    // middle of a stream frame loses the transmitter (and used to

@@ -561,6 +561,27 @@ static void apply_gain(int16_t *s, int len, double gain) {
     }
 }
 
+static bool m_mic_file_on;
+static bool m_mic_file_started;         // the clip is opened at the first pull
+static char m_mic_file_path[256];
+
+void audio_mic_file_set(const char *path) {
+    if (!path || !path[0]) {
+        m_mic_file_on = false;
+        m_mic_file_path[0] = 0;
+        audio_file_mic_close();
+        return;
+    }
+    snprintf(m_mic_file_path, sizeof(m_mic_file_path), "%s", path);
+    audio_file_set(m_mic_file_path, NULL);
+    audio_file_mic_open();
+    m_mic_file_on = true;
+    m_mic_file_started = false;         // opened for real when the over starts
+}
+
+bool audio_mic_file_active(void) { return m_mic_file_on; }
+bool audio_mic_file_eof(void) { return m_mic_file_on && audio_file_eof(); }
+
 void audio_input(int16_t *s, int len) {
     if (len <= 0) return;
 #ifdef M17WEB_DIAG
@@ -580,7 +601,18 @@ void audio_input(int16_t *s, int len) {
         return;
     }
 
-    switch (m_r_in) {
+    if (m_mic_file_on) {
+        // A prepared clip: the station reads it exactly as fast as the transmitter
+        // asks for it, which is the one rate that cannot be wrong - no starvation
+        // and no ring overrun, whatever the network is doing.  The file is opened
+        // here rather than when the command was typed, because keying the
+        // transmitter runs the microphone-open path and closes it again.
+        if (!m_mic_file_started) {
+            m_mic_file_started = true;
+            audio_file_mic_open();
+        }
+        audio_file_input(s, len);
+    } else switch (m_r_in) {
         case AROUTE_BROWSER:
         case AROUTE_PHONE:
         case AROUTE_AI:

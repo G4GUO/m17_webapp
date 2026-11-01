@@ -578,6 +578,22 @@ void mmi_parse(char *cmd){
 		}
 	}
 
+	/* Play a prepared clip through the transmitter.  The station reads the file
+	 * itself, on its own clock, so nothing about network timing can starve the
+	 * vocoder or overflow its ring, and the over ends at the end of the file. */
+	if(strncmp(token[0],"micfile",7) == 0 && nt >= 2){
+		if(strcasecmp(token[1],"off") == 0){
+			audio_mic_file_set("");
+			gui_cmd_resp("microphone: back to the configured route");
+		} else {
+			char line[300];
+			audio_mic_file_set(token[1]);
+			snprintf(line, sizeof(line), "microphone: playing %s", token[1]);
+			gui_cmd_resp(line);
+		}
+		valid = true;
+	}
+
 	/* "w" is the clear-log key in the web UI, but a one character prefix matched
 	 * every command beginning with w - typing "wiretest" also wiped the log. */
 	if(strcmp(token[0],"w")==0 || strcmp(token[0],"clear")==0){
