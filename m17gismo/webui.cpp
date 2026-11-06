@@ -753,13 +753,17 @@ static void web_on_msg(int id, int is_binary, const uint8_t *data, int len, void
     (void)user;
     if (is_binary) {
         if (len > 1 && data[0] == AUDIO_TAG_MIC) {
-            // The phone route takes the microphone from the phone and nowhere
-            // else; the browser route keeps taking it from any client, which is
-            // what it has always done.
+            // Every route names its client, in this direction too: the browser
+            // route's client is the plain page, role "".  Taking the microphone
+            // from any role let an assistant, or a phone that was connected for
+            // some other reason, put audio on air with "ai" and "phone"
+            // unselected - the mirror of the speaker leak.
             const char *role = ws_client_role(m_srv, id);
             AudioRoute rin = audio_get_route(false);
-            if (rin == AROUTE_PHONE && strcmp(role, "phone") != 0) return;
-            if (rin == AROUTE_AI && strcmp(role, "ai") != 0) return;
+            const char *want = (rin == AROUTE_AI)    ? "ai"
+                             : (rin == AROUTE_PHONE) ? "phone"
+                                                     : "";
+            if (strcmp(role, want) != 0) return;
             int n = (len - 1) / 2;
             m_last_mic_ms = now_ms();
             audio_web_mic_push((const int16_t *)(data + 1), n);
