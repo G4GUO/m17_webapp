@@ -1184,6 +1184,21 @@ class PeakLimiter {
     return s;
   }
 }
+// The wire format is one byte of tag followed by s16le, and the station takes
+// the samples to be at data+1 (webui.cpp, and tools/android_proto_check.py
+// builds the same thing).  Frame the microphone in an Int16Array and the tag
+// becomes a two byte word, so every sample is read one byte early: the Pi then
+// decodes the high byte of one sample ORed with the low byte of the next, which
+// measured -21 dB SNR against the source and full scale peak on speech that
+// never passed 11212 - that is the rasping "distortion" the operator hears, and
+// it is noise, not speech.  Keep this function the one place that packs a frame.
+function packMicFrame(samples, off) {
+  const frame = new Uint8Array(1 + 320);
+  frame[0] = TAG_MIC;
+  const dv = new DataView(frame.buffer);
+  for (let i = 0; i < 160; i++) dv.setInt16(1 + i * 2, Math.round(samples[off + i] * 32767), true);
+  return frame;
+}
 // ---- mic-dsp-end ---------------------------------------------------------
 
 class Upsampler {
@@ -1281,10 +1296,8 @@ async function startAudio() {
       if (!txHeld || !ws || ws.readyState !== WebSocket.OPEN) return;
       for (let i = 0; i < s.length; i++) pending.push(s[i]);
       while (pending.length >= 160) {
-        const frame = new Int16Array(161);
-        frame[0] = TAG_MIC;
-        for (let i = 0; i < 160; i++) frame[i + 1] = Math.round(pending.shift() * 32767);
-        ws.send(frame.buffer);
+        ws.send(packMicFrame(pending, 0));
+        pending.splice(0, 160);
       }
     };
     src.connect(audio.micNode);
