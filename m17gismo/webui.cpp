@@ -820,8 +820,15 @@ void webui_audio_to_browser(const int16_t *s, int len) {
     if (ws_client_count(m_srv) == 0) return;
     // With the phone route the audio belongs to the phone alone, so a page open
     // on the desk can be the control surface without also being the speaker.
+    // The assistant is the same: a client that asked for /ws?client=ai is only
+    // fed the receiver when the route selects it.  Passing NULL here meant
+    // "every client", so an assistant connected for some other reason heard
+    // every over with "ai" unselected, which is how it was reported.  A plain
+    // page has role "" and is the browser route's client.
     AudioRoute rout = audio_get_route(true);
-    const char *only = (rout == AROUTE_PHONE) ? "phone" : (rout == AROUTE_AI ? "ai" : NULL);
+    const char *only = (rout == AROUTE_PHONE) ? "phone"
+                     : (rout == AROUTE_AI)    ? "ai"
+                                              : "";
     static uint8_t buf[1 + 2048];
     int maxsamples = (int)(sizeof(buf) - 1) / 2;
     int off = 0;
