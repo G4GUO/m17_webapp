@@ -1069,30 +1069,122 @@ function dialLevels(mic, spk) {
 // Audio (WebAudio <-> 8 kHz PCM over the WebSocket)
 // ---------------------------------------------------------------------------
 const audio = {
-  ctx: null, outGain: null, micNode: null, spkNode: null,
+  ctx: null, micCtx: null, outGain: null, micNode: null, spkNode: null,
   stream: null, queue: [], queued: 0, playing: false, lastMicLevel: 0,
 };
 
+// ---- mic-dsp-begin -------------------------------------------------------
+// Windowed-sinc low pass for decimating to 8 kHz: flat to 3.4 kHz, stop band
+// from the output's Nyquist.  A box average is not an anti-alias filter - at
+// 48 kHz it passes 5 kHz down to 3 kHz only 6 dB down, so sibilants and room
+// hiss fold into the band the 3200 bps vocoder spends its bits on, and the
+// result is heard as gravel.  Measured on the box version: 5 kHz -> -6 dB,
+// 6 kHz -> -10 dB, 11 kHz -> -13 dB, all landing in 1-3 kHz.
+function decimatorTaps(inRate, taps) {
+  const cutoff = Math.min(3700, 0.44 * inRate);
+  const h = new Float64Array(taps), m = (taps - 1) / 2;
+  let sum = 0;
+  for (let i = 0; i < taps; i++) {
+    const t = i - m;
+    const s = t === 0
+      ? 2 * cutoff / inRate
+      : Math.sin(2 * Math.PI * cutoff * t / inRate) / (Math.PI * t);
+    const w = 0.42 - 0.5 * Math.cos(2 * Math.PI * i / (taps - 1))
+                   + 0.08 * Math.cos(4 * Math.PI * i / (taps - 1));   // Blackman
+    h[i] = s * w; sum += h[i];
+  }
+  for (let i = 0; i < taps; i++) h[i] /= sum;     // unity gain at DC
+  return h;
+}
+
 class Downsampler {
-  // box-filter decimation from ctxRate to 8 kHz
+  // Rate conversion from the capture context down to 8 kHz, in floats.  The
+  // filter runs at the input rate and a cubic pick takes the fractional output
+  // positions, so 44.1 kHz works as well as 48 kHz without any pattern of 5 and
+  // 6 sample averages to modulate the signal.  Unused when the capture context
+  // is itself 8 kHz, which is the path the page prefers.
   constructor(inRate, outRate) {
     this.step = inRate / outRate;
-    this.acc = 0; this.sum = 0; this.n = 0; this.out = [];
+    this.id = this.step < 1.0001;
+    if (this.id) return;
+    // 321 taps keeps the stop band a few hundred hertz below the output's
+    // Nyquist, which is what makes 3.4 kHz flat and 4.1 kHz 70 dB down.
+    this.h = decimatorTaps(inRate, Math.max(129, Math.min(321, Math.round(inRate / 116) | 1)));
+    this.n = this.h.length;
+    this.x = new Float32Array(this.n);    // input history ring
+    this.w = -1;
+    this.fy = new Float64Array(32);       // filtered samples, by absolute index
+    this.i = -1;                          // absolute index of the newest one
+    this.p = 0;                           // absolute position of the next output
+    this.rebaseAt = 1 << 21;
   }
   process(float32) {
-    for (let i = 0; i < float32.length; i++) {
-      this.sum += float32[i]; this.n++;
-      this.acc += 1;
-      if (this.acc >= this.step) {
-        const v = Math.max(-1, Math.min(1, this.sum / Math.max(1, this.n)));
-        this.out.push(v < 0 ? v * 0x8000 : v * 0x7FFF);
-        this.acc -= this.step; this.sum = 0; this.n = 0;
+    const res = [];
+    if (this.id) {
+      for (let i = 0; i < float32.length; i++) res.push(float32[i]);
+      return res;
+    }
+    const n = this.n, h = this.h, x = this.x, fy = this.fy;
+    for (let s = 0; s < float32.length; s++) {
+      this.w = (this.w + 1) % n;
+      x[this.w] = float32[s];
+      let acc = 0, j = this.w;
+      for (let k = 0; k < n; k++) { acc += h[k] * x[j]; j = j === 0 ? n - 1 : j - 1; }
+      this.i++;
+      fy[this.i & 31] = acc;
+      // Only emit a position once two samples of look-ahead exist for the pick.
+      while (this.p + 2 <= this.i) {
+        const idx = Math.floor(this.p), f = this.p - idx;
+        const a = fy[(idx - 1) & 31], b = fy[idx & 31],
+              c = fy[(idx + 1) & 31], d = fy[(idx + 2) & 31];
+        const c1 = 0.5 * (c - a);
+        const c2 = a - 2.5 * b + 2 * c - 0.5 * d;
+        const c3 = 0.5 * (d - a) + 1.5 * (b - c);
+        res.push(((c3 * f + c2) * f + c1) * f + b);       // Catmull-Rom
+        this.p += this.step;
+      }
+      if (this.i > this.rebaseAt) {
+        // Both counters are only ever used modulo the ring and relative to each
+        // other, so shifting them by a multiple of the ring keeps them exact.
+        const d = (this.i - 16) & ~31;
+        this.i -= d; this.p -= d;
       }
     }
-    const a = this.out; this.out = [];
-    return a;
+    return res;
   }
 }
+
+class PeakLimiter {
+  // The browser is the only place clipping can be prevented: the station's
+  // micgain is applied to samples that are already int16, so a hot webcam
+  // arrives with flat tops and no trim on the Pi can put the waveform back.
+  // Attack is the current block (never let a peak through), release is slow
+  // enough not to pump between syllables.
+  constructor(ceiling = 0.94, releaseMs = 500) {
+    this.ceiling = ceiling;
+    this.releaseMs = releaseMs;
+    this.g = 1;
+  }
+  process(s) {
+    if (!s.length) return s;
+    let peak = 0;
+    for (let i = 0; i < s.length; i++) { const a = s[i] < 0 ? -s[i] : s[i]; if (a > peak) peak = a; }
+    if (peak > this.ceiling) {
+      const need = this.ceiling / peak;
+      if (need < this.g) this.g = need;
+    } else if (this.g < 1) {
+      const t = s.length / RATE;                     // seconds in this block
+      this.g = 1 - (1 - this.g) * Math.exp(-t * 1000 / this.releaseMs);
+    }
+    for (let i = 0; i < s.length; i++) {
+      let v = s[i] * this.g;
+      if (v > this.ceiling) v = this.ceiling; else if (v < -this.ceiling) v = -this.ceiling;
+      s[i] = v;
+    }
+    return s;
+  }
+}
+// ---- mic-dsp-end ---------------------------------------------------------
 
 class Upsampler {
   // linear interpolation from 8 kHz to the context rate
@@ -1135,7 +1227,11 @@ function setSpkMute() {
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 async function startAudio() {
-  if (audioReady) { try { await audio.ctx.resume(); } catch (e) {} return true; }
+  if (audioReady) {
+    try { await audio.ctx.resume(); } catch (e) {}
+    if (audio.micCtx) { try { await audio.micCtx.resume(); } catch (e) {} }
+    return true;
+  }
   try {
     audio.ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     // resume() never settles on a machine with no output device, so it must not
@@ -1143,24 +1239,40 @@ async function startAudio() {
     // later gesture resumes the context.
     await Promise.race([audio.ctx.resume().catch(() => {}), sleep(1500)]);
     const rate = audio.ctx.sampleRate;
-    down = new Downsampler(rate, RATE);
     up = new Upsampler(RATE, rate);
+
+    // Capture goes on its own 8 kHz context where the browser will make one:
+    // its resampler is a proper anti-alias filter, so nothing above 4 kHz can
+    // fold into the voice band.  Where the rate request is ignored (some
+    // browsers pin the hardware rate), Downsampler does the filtering instead.
+    let capCtx = audio.ctx, capRate = rate;
+    try {
+      const c = new (window.AudioContext || window.webkitAudioContext)(
+        { sampleRate: RATE, latencyHint: 'interactive' });
+      if (c.sampleRate === RATE) { audio.micCtx = capCtx = c; capRate = RATE; }
+      else if (c.close) c.close();
+    } catch (e) { /* keep the playback context and filter in JS */ }
+    if (audio.micCtx) await Promise.race([audio.micCtx.resume().catch(() => {}), sleep(1500)]);
+    down = new Downsampler(capRate, RATE);
+    const limiter = new PeakLimiter();
 
     audio.stream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
     });
-    const src = audio.ctx.createMediaStreamSource(audio.stream);
+    const src = capCtx.createMediaStreamSource(audio.stream);
     audio.outGain = audio.ctx.createGain();
     // Unity here by design: the received audio arrives already scaled by the
     // station's speaker volume, which is the control the meters reflect.
     audio.outGain.gain.value = txHeld ? 0 : 1;
     audio.outGain.connect(audio.ctx.destination);
 
-    // microphone -> 8 kHz -> websocket
-    audio.micNode = audio.ctx.createScriptProcessor(1024, 1, 1);
+    // microphone -> 8 kHz -> websocket.  A 256 sample block is 32 ms at 8 kHz
+    // and 21 ms at 48 kHz; 1024 in the 8 kHz context would be 128 ms, and the
+    // station starts the over after 125 ms of pre-roll.
+    audio.micNode = capCtx.createScriptProcessor(capRate === RATE ? 256 : 1024, 1, 1);
     const pending = [];
     audio.micNode.onaudioprocess = (ev) => {
-      const s = down.process(ev.inputBuffer.getChannelData(0));
+      const s = limiter.process(down.process(ev.inputBuffer.getChannelData(0)));
       // The passthrough buffer must be silent: we never monitor ourselves
       for (let i = 0; i < ev.outputBuffer.numberOfChannels; i++)
         ev.outputBuffer.getChannelData(i).fill(0);
@@ -1171,12 +1283,12 @@ async function startAudio() {
       while (pending.length >= 160) {
         const frame = new Int16Array(161);
         frame[0] = TAG_MIC;
-        for (let i = 0; i < 160; i++) frame[i + 1] = pending.shift();
+        for (let i = 0; i < 160; i++) frame[i + 1] = Math.round(pending.shift() * 32767);
         ws.send(frame.buffer);
       }
     };
     src.connect(audio.micNode);
-    audio.micNode.connect(audio.ctx.destination); // sink so the node runs; buffer stays silent
+    audio.micNode.connect(capCtx.destination); // sink so the node runs; buffer stays silent
 
     // 8 kHz -> speaker
     audio.spkNode = audio.ctx.createScriptProcessor(2048, 0, 1);
@@ -1194,7 +1306,8 @@ async function startAudio() {
     // is usually the laptop's own array rather than the one that was expected.
     const track = audio.stream.getAudioTracks ? audio.stream.getAudioTracks()[0] : null;
     addLog('info', 'browser audio running: ' + (track ? track.label : 'microphone') +
-      ' at ' + rate + ' Hz, carried at ' + RATE + ' Hz');
+      ' at ' + capRate + ' Hz, carried at ' + RATE + ' Hz' +
+      (capRate === RATE ? ' (browser resampler)' : ' (page filter)'));
     return true;
   } catch (err) {
     const msg = 'browser audio failed: ' + err.message +
