@@ -112,6 +112,19 @@ if [ "$CHECK_ONLY" -eq 0 ]; then
 fi
 
 # ----------------------------------------------------------------- the checks
+# This script lives in the tree it just reset, so the copy running now may be the
+# previous version - `sh` reads a script as it goes, and the reset rewrote the
+# file underneath it (9 Nov: an old single-shot HTTP check failed a restart that
+# was fine).  Hand over to the version that is now checked out.
+if [ "$CHECK_ONLY" -eq 0 ]; then
+    SELF=$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")
+    NEW="$SRC/tools/station-sync.sh"
+    if [ -f "$NEW" ] && ! cmp -s "$SELF" "$NEW"; then
+        say "== the checked-out script is newer than the one running, re-running it"
+        exec sh "$NEW" --check
+    fi
+fi
+
 FAIL=0
 if [ -d "$SERVICE_DIR/www" ]; then
     for f in "$SRC"/m17gismo/www/*; do
