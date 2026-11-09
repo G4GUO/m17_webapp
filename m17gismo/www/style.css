@@ -88,12 +88,15 @@ body.no-diag #recstat { display: none; }
 .link.on { background: rgba(62,207,142,.15); color: var(--green); }
 .link.off { background: rgba(255,92,92,.15); color: var(--red); }
 
-main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(330px, 27rem); gap: .5rem; padding: .45rem .5rem; align-items: start; }
-/* The left column stacks two cards across; the console column stays one wide, short column */
-.col { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; align-content: start; }
-.col.wide { grid-template-columns: minmax(0, 1fr); }
+/* Three equal columns of cards.  main carries the three tracks; the left
+   section spans two of them and stacks its own cards two across with the same
+   gap, so every card on the page comes out the same width - the console column
+   is a third of the page like the two beside it, not a fixed 27rem. */
+main { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; padding: .45rem .5rem; align-items: start; }
+.col { grid-column: span 2; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; align-content: start; }
+.col.wide { grid-column: auto; grid-template-columns: minmax(0, 1fr); }
 .col > .span2 { grid-column: 1 / -1; }
-@media (max-width: 1000px) { main { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 1000px) { main { grid-template-columns: minmax(0, 1fr); } .col { grid-column: auto; } }
 @media (max-width: 760px) { .col { grid-template-columns: minmax(0, 1fr); } }
 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: .6rem; padding: .34rem .5rem; }
