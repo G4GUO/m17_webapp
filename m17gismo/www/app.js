@@ -55,10 +55,12 @@ function handleJson(txt) {
     case 'state': applyState(m); break;
     case 'log': addLog(m.kind, m.line); break;
     case 'resp': addLog('resp', m.line); break;
-    case 'help': $('help').textContent = (m.lines || []).join('\n'); break;
+    case 'help': helpLines = m.lines || []; renderHelp(); break;
+    case 'sms': addSms(m); break;
     case 'clear': $('log').innerHTML = ''; break;
     case 'refs': fillRefs(m.names); break;
     case 'hello':
+      if (m.sms_max) smsMax = m.sms_max;
       checkStamp(m.stamp);
       addLog('info', 'connected to ' + (m.app || 'm17web') + ' (protocol ' + m.proto + ')');
       break;
@@ -81,19 +83,48 @@ function applyState(s) {
   $('clients').textContent = s.clients ?? 0;
 
   const led = $('pttled');
-  led.textContent = s.ptt || 'RX';
-  led.className = 'led' + (s.ptt === 'TX' ? ' tx' : s.ptt === 'DX' ? ' dx' : '');
+  // State the direction, not just the state: "TX" alone leaves you guessing
+  // whether a burst you can hear is yours or the other station's.
+  // 'CA' is the carrier mode ('tc'): the radio is keyed and radiating, so it
+  // must not read RX - that made an on-air carrier look like a dead transmitter
+  // and sent us hunting for a fault that was not there.  Name it, because a
+  // carrier has no destination and no audio.
+  const carrier = (s.ptt === 'CA');
+  const txing = (s.ptt === 'TX' || carrier);
+  const peer = (s.dst || '').trim();
+  const heard = (s.rx_src || '').trim();
+  led.textContent = carrier
+    ? 'TX carrier'
+    : txing
+      ? ('TX' + (peer ? ' \u2192 ' + peer : ''))
+      : (s.ptt === 'DX' ? 'DX' : 'RX');
+  led.className = 'led' + (txing ? ' tx' : s.ptt === 'DX' ? ' dx' : '');
 
-  // The station being received belongs here, not in the callsign box
+  // The station being received belongs here, not in the callsign box.  While
+  // this station is transmitting, say so instead of showing the last station
+  // heard: the old text made our own bursts look like someone else's.
   const fi = $('frameind');
-  const rx = (s.rx_src || '').trim();
+  const rx = heard;
   // In client mode there is no radio: what is heard came off the reflector, so
   // say who it is rather than talking about frames.
   const client = (s.mode || '').trim() === 'client';
-  fi.textContent = s.in_frame
-    ? (rx ? ((client ? 'hearing ' : 'in frame: ') + rx) : (client ? 'hearing' : 'in frame'))
-    : 'no signal';
-  fi.className = 'badge' + (s.in_frame ? ' sig' : '');
+  if (txing) {
+    fi.textContent = 'transmitting' + (peer ? ' to ' + peer : '');
+  } else if (s.in_frame) {
+    fi.textContent = rx
+      ? ((client ? 'hearing ' : 'receiving from ') + rx)
+      : (client ? 'hearing' : 'receiving');
+  } else if (s.act === 'TX' && s.act_age >= 0) {
+    // A burst is shorter than the state interval, so it is normally over before
+    // the page hears about it; say what just went out and how long ago.
+    fi.textContent = 'sent' + (peer ? ' to ' + peer : '') +
+                     ' (' + Math.round(s.act_age / 1000) + 's ago)';
+  } else if (s.act === 'RX' && s.act_age >= 0 && rx) {
+    fi.textContent = 'heard ' + rx + ' (' + Math.round(s.act_age / 1000) + 's ago)';
+  } else {
+    fi.textContent = 'no signal';
+  }
+  fi.className = 'badge' + ((txing || s.act === 'TX') ? ' tx' : s.in_frame ? ' sig' : '');
 
   $('signalbar').value = s.signal || 0;
   $('powerbar').value = s.power || 0;
@@ -473,12 +504,19 @@ function renderMixer(s) {
 function renderPosition(s) {
   const g = s.gps || {};
   const grid = (g.grid || '').trim();
-  $('grid').textContent = (grid && grid !== '--') ? grid : '------';
-  $('latlon').textContent = g.valid
-    ? Number(g.lat).toFixed(5) + ', ' + Number(g.lon).toFixed(5)
+  // A lock that comes and goes should not blank the position: show where the
+  // station last was, with its age, once it is no longer current.
+  const age = g.age_s !== undefined ? Number(g.age_s) : 0;
+  const known = !!(g.valid || (g.has && grid && grid !== '--'));
+  const stale = known && !g.fresh;
+  const ago = age < 90 ? Math.round(age) + 's' : Math.round(age / 60) + ' min';
+  $('grid').textContent = (known && grid && grid !== '--') ? grid : '------';
+  $('latlon').textContent = known
+    ? Number(g.lat).toFixed(5) + ', ' + Number(g.lon).toFixed(5) + (stale ? ' (stale)' : '')
     : 'no fix';
   const bits = [];
-  if (g.valid) {
+  if (stale) bits.push('last fix ' + ago + ' ago');
+  if (known) {
     if (g.sats) bits.push(g.sats + ' satellites');
     if (g.hdop) bits.push('HDOP ' + Number(g.hdop).toFixed(2));
     if (g.alt_m !== undefined) bits.push(g.alt_m + ' m');
@@ -488,22 +526,29 @@ function renderPosition(s) {
   $('gpsdetail').textContent = bits.join(' \u00b7 ') || 'waiting for the GPS...';
   // The same information in the top bar
   const hg = $('hdrgrid');
-  hg.textContent = (grid && grid !== '--') ? grid : '------';
+  hg.textContent = (known && grid && grid !== '--') ? grid : '------';
   hg.className = 'val grid' + (g.fresh ? ' live' : '');
-  $('hdrlatlon').textContent = g.valid
-    ? Number(g.lat).toFixed(5) + ', ' + Number(g.lon).toFixed(5)
+  $('hdrlatlon').textContent = known
+    ? Number(g.lat).toFixed(5) + ', ' + Number(g.lon).toFixed(5) + (stale ? ' (stale)' : '')
     : 'no fix';
   const hgn = $('hdrgnss');
   hgn.textContent = g.tx ? 'sending' : (g.valid ? 'ready' : 'none');
   hgn.className = 'val' + (g.tx ? ' live' : '');
 
   // A position heard from another station
+  // A position heard from another station.  Kept on screen after the last frame:
+  // a position heard ten minutes ago still says where that station was, so it is
+  // marked stale rather than thrown away.
   const hd = s.heard, hel = $('heard');
   if (hd && hd.grid) {
+    const age = Number(hd.age_s) || 0;
+    const when = age < 90 ? Math.round(age) + 's ago'
+                          : Math.round(age / 60) + ' min ago';
     hel.style.display = '';
     hel.textContent = 'heard ' + hd.src + ' at ' + hd.grid +
-      ' (' + Number(hd.lat).toFixed(5) + ', ' + Number(hd.lon).toFixed(5) + ', ' +
-      Number(hd.age_s).toFixed(0) + 's ago)';
+      ' (' + Number(hd.lat).toFixed(5) + ', ' + Number(hd.lon).toFixed(5) + ', ' + when + ')' +
+      (age > 300 ? ' \u2014 stale' : '');
+    hel.className = 'note' + (age > 300 ? ' gpsstale' : '');
   } else {
     hel.style.display = 'none';
   }
@@ -811,8 +856,37 @@ function wire() {
   };
 
   document.querySelectorAll('button[data-cmd]').forEach((b) => {
-    b.onclick = () => cmd(b.dataset.cmd);
+    b.onclick = () => {
+      const c = b.dataset.cmd;
+      // Say what was sent.  Without this a button whose effect is already in
+      // place - broadcast when the destination is already broadcast, help when
+      // the help pane is already full - is indistinguishable from a dead one.
+      addLog('resp', '\u203a ' + c);
+      if (c === 'h') {
+        const box = $('helpsearch');
+        if (box) { box.value = ''; renderHelp(); }        // the button means "show me everything"
+        const help = $('help');
+        if (help) { help.scrollTop = 0; help.closest('.card').scrollIntoView({ block: 'nearest' }); }
+      }
+      if (c === 'ba') {
+        const d = $('dst');
+        if (d) { d.classList.remove('flash'); void d.offsetWidth; d.classList.add('flash');
+                 setTimeout(() => d.classList.remove('flash'), 800); }
+      }
+      cmd(c);
+    };
   });
+
+  if ($('helpsearch')) $('helpsearch').oninput = renderHelp;
+
+  if ($('smssend')) $('smssend').onclick = smsSend;
+  if ($('smsinput')) {
+    $('smsinput').onkeydown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); smsSend(); }
+    };
+    $('smsinput').oninput = smsHint;
+  }
+  smsHint();
 
   $('micgain').oninput = (e) => { $('micgainout').textContent = dbLabel(e.target.value / 100); };
   $('micgain').onchange = (e) => cmd('micgain ' + e.target.value);
@@ -1143,5 +1217,128 @@ function handleBinary(u8) {
 }
 
 // ---------------------------------------------------------------------------
+// SMS.  Received messages arrive one per event with their time and the station
+// that sent them; the list keeps the last M17_SMS_KEEP so a page opened much
+// later still shows what has been heard.
+let smsMax = 821;
+const SMS_SHOWN = 5;      // must match M17_SMS_SHOWN in m17_sms.h      // how many messages the card shows; the station keeps more
+
+function addSms(m) {
+  const list = $('smslist');
+  if (!list) return;
+  const d = document.createElement('div');
+  d.className = 'sms';
+  const t = document.createElement('span');
+  t.className = 'smst';
+  t.textContent = m.time || '--:--:--';
+  const s = document.createElement('span');
+  s.className = 'smss';
+  s.textContent = '[' + (m.src || '?') + ']';   // brackets: not part of the message
+  const x = document.createElement('span');
+  x.className = 'smstx';
+  x.textContent = m.text || '';
+  d.appendChild(t);
+  d.appendChild(s);
+  d.appendChild(x);
+  list.insertBefore(d, list.firstChild);
+  while (list.children.length > SMS_SHOWN)
+    list.removeChild(list.lastChild);
+  smsCount();
+}
+
+function smsCount() {
+  const n = $('smslist') ? $('smslist').children.length : 0;
+  const c = $('smscount');
+  if (c) c.textContent = n ? n + ' heard' : '';
+}
+
+function smsSend() {
+  const box = $('smsinput');
+  if (!box) return;
+  const text = box.value.trim();
+  if (!text) return;
+  // Its own message type, not a "sms <text>" command: the command line is cut at
+  // 250 characters and a message can be 821.
+  send(JSON.stringify({ t: 'sms', text: text.slice(0, smsMax) }));
+  box.value = '';
+  smsHint();
+}
+
+function smsHint() {
+  const box = $('smsinput'), hint = $('smshint');
+  if (!box || !hint) return;
+  const n = box.value.length;
+  hint.textContent = n ? n + ' / ' + smsMax + ' characters' : smsMax + ' characters maximum';
+}
+
+// ---------------------------------------------------------------------------
+// Help search.  There are enough commands that reading the whole list to find
+// one is the slow way round, so the box narrows it to the likely lines: a
+// substring beats a scattered match, and "all" (or an empty box) shows the lot.
+let helpLines = [];
+
+function fuzzyScore(q, s) {
+  q = q.toLowerCase();
+  s = s.toLowerCase();
+  if (!q) return 1;
+  // A match at the start of a word is what the eye wants: help lines begin with
+  // the command, so "kiss" should find kisport and not the "k...i...s...s" that
+  // hides inside any long sentence.
+  const esc = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const word = new RegExp('(^|[^a-z0-9])' + esc).exec(s);
+  if (word) return 3000 - word.index;
+  const at = s.indexOf(q);
+  if (at >= 0) return 2000 - at;          // inside a word, still contiguous
+  // Scattered: fine only if the characters sit close together.  Counting gaps
+  // alone let any sentence match; density is what separates "rg" from "rubbish".
+  let i = 0, first = -1, last = -1;
+  for (let j = 0; j < s.length && i < q.length; j++) {
+    if (s[j] === q[i]) { if (first < 0) first = j; last = j; i++; }
+  }
+  if (i < q.length) return 0;
+  const density = q.length / (last - first + 1);
+  if (density < 0.5) return 0;            // too scattered to be what was meant
+  return Math.round(1000 * density) - first;
+}
+
+function renderHelp() {
+  const box = $('helpsearch'), pre = $('help'), count = $('helpcount');
+  if (!pre) return;
+  const q = (box ? box.value : '').trim();
+  if (!q || q.toLowerCase() === 'all') {
+    pre.textContent = helpLines.join('\n');
+    if (count) count.textContent = helpLines.length ? helpLines.length + ' lines' : '';
+    return;
+  }
+  const hits = helpLines
+    .map((l) => [fuzzyScore(q, l), l])
+    .filter((p) => p[0] > 0)
+    .sort((a, b) => b[0] - a[0]);
+  const shown = hits.slice(0, 25).map((p) => p[1]);
+  pre.textContent = shown.length
+    ? shown.join('\n')
+    : 'nothing matches "' + q + '" - clear the box or type all';
+  if (count) count.textContent = hits.length + ' match' + (hits.length === 1 ? '' : 'es');
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics on or off.  The console card and the debugging counters are what
+// make the panel look busy, so they can be hidden outright; the choice is kept
+// in the browser and applied before the first frame arrives.
+function initDiagToggle() {
+  const box = $('diagtoggle');
+  if (!box) return;
+  const apply = (on) => {
+    document.body.classList.toggle('no-diag', !on);
+    box.checked = on;
+    try { localStorage.setItem('m17web.diag', on ? '1' : '0'); } catch (e) { /* storage blocked */ }
+  };
+  let saved = '1';
+  try { saved = localStorage.getItem('m17web.diag') || '1'; } catch (e) { /* storage blocked */ }
+  apply(saved !== '0');
+  box.addEventListener('change', () => apply(box.checked));
+}
+
 connect();
 wire();
+initDiagToggle();

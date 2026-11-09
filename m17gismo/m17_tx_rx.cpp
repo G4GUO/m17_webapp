@@ -6,6 +6,11 @@
 #include <pthread.h>
 #include <time.h>
 #include "m17defines.h"
+#include "m17_ax25.h"
+#include "m17_sms.h"
+#include "m17_mailbox.h"
+#include "fargan.h"   // receive-only neural synthesis; a stub unless FARGAN_RX
+#include "recorder.h" // optional capture of the decoded audio as a WAV
 // codec2 (or the modified codec through codec2mod/codec2_shim.h) is included by
 // m17defines.h according to CODEC2_BACKEND.
 
@@ -162,7 +167,39 @@ static void m17_tx_lead_in_to_net(void)  { m17_tx_lead_in_ex(true); }
 
 void m17_txrx_spkr_audio( uint8_t *data ){
 
+   // Receive-only option: the same 8-byte Codec2 3200 frame, synthesised by
+   // FARGAN instead of the sinusoidal model.  The frame is untouched, so the
+   // station at the other end cannot tell which synthesiser is in use here.
+   //
+   // The synthesis costs about half a Pi 4 core and this runs on the radio
+   // thread and on the reflector thread, so it is done elsewhere: the frame is
+   // queued and whatever finished audio is ready is played.  Nothing is waiting
+   // for the vocoder - a frame or two of latency is the price, which matters far
+   // less than the demodulator falling behind.
+   static int16_t last[320];          // zeros until the first block arrives
+   if (fargan_rx_enabled()) {
+      int16_t block8[160], block16[320];
+      fargan_rx_push(data);
+      if (fargan_rx_pull(block8, block16)) {
+         memcpy(last, block8, sizeof(block8));
+         // The audio path plays the 8 kHz version, but a recording keeps
+         // FARGAN's own 16 kHz output: that is the resolution it synthesised at,
+         // and decimating it only throws information away.
+         rec_push(block16, 320, 16000);
+         m17_mailbox_audio(block16, 320);
+         audio_output(block8, m_nsam);
+         return;
+      }
+      // If nothing is ready yet - the first frames after switching on - keep the
+      // audio stream fed with the previous block rather than dropping to silence.
+      audio_output(last, m_nsam);
+      return;
+   }
+
    codec2_decode(m_codec2, m_aspksamples, data);
+   memcpy(last, m_aspksamples, sizeof(int16_t) * (m_nsam < 320 ? m_nsam : 320));
+   rec_push(m_aspksamples, m_nsam, 8000);      // the classic decoder is 8 kHz
+   m17_mailbox_audio(m_aspksamples, m_nsam);
    audio_output(m_aspksamples, m_nsam);
 }
 
@@ -272,6 +309,9 @@ void *m17_txrx_thread(void *arg){
 			    if (m17_tx_lich_index() == 0) m17_tx_meta_from_gps(false);
 			    // Send Sub frame
 			    m17_send_stream_frame( payload );
+			    // A clip played from a file ends where the file ends: no timing
+			    // guesswork about how long to hold the transmitter up.
+			    if (audio_mic_file_active() && audio_mic_file_eof()) m_ptt = PTT_RX;
 #ifdef M17WEB_DIAG
 			    clock_gettime(CLOCK_MONOTONIC, &d3);
 #endif
@@ -305,6 +345,9 @@ void *m17_txrx_thread(void *arg){
 		    audio_mic_open();
 		    audio_spk_open();
 		    usleep(120000);// Buffer 6 sound blocks
+		    // Apply any pending audio change now, with the radio still
+		    // unkeyed: this is the only safe moment.
+		    if (audio_backend_pending()) audio_apply_pending();
 		    // Go to transmit
 		    radio_duplex();
 	        // Send preamble
@@ -334,12 +377,13 @@ void *m17_txrx_thread(void *arg){
 			    if (m17_tx_lich_index() == 0) m17_tx_meta_from_gps(false);
 			    // Send Sub frame
 			    m17_send_stream_frame( payload );
-			    // Apply a backend change made in the web UI (browser <-> Pi sound
-			    // card) without waiting for the next transmission
-			    if (audio_backend_pending()) {
-			        audio_mic_close(); audio_mic_open();
-			        audio_spk_close(); audio_spk_open();
-			    }
+			    // A clip played from a file ends where the file ends: no timing
+			    // guesswork about how long to hold the transmitter up.
+			    if (audio_mic_file_active() && audio_mic_file_eof()) m_ptt = PTT_RX;
+			    // A pending audio change is applied *before* the next
+			    // transmission, never here: closing a bluealsa PCM in the
+			    // middle of a stream frame loses the transmitter (and used to
+			    // take the whole process down).
 			    // Receive audio
 			    int len = radio_receive_samples( m_rsamples, N_SAMPLES );
 			    m17_dsp_rx( m_rsamples, len);
@@ -360,14 +404,21 @@ void *m17_txrx_thread(void *arg){
 		    audio_spk_open();
 			while((m_ptt == PTT_RX)&&M17_MODE_OK(gen)){
 			    // Re-open the audio paths if the web UI changed the backend
-			    if (audio_backend_pending()) {
-			        audio_spk_close();
-			        audio_spk_open();
-			    }
+			    if (audio_backend_pending()) audio_apply_pending();
 			    int len = radio_receive_samples( m_rsamples, N_SAMPLES );
 			    m17_dsp_rx( m_rsamples, len );
 			    // Throw input samples away
 				radio_rssi_update();
+				// AX.25 over M17: transmit a queued packet if the channel is
+				// clear.  It keys up, sends the burst and unkeys before
+				// returning; a no-op unless packet mode has been turned on.
+				if (m17_ax25_service())
+				    continue;
+				// SMS over M17: one message per pass, sent from this
+				// thread because the modulator and the radio's buffers
+				// belong to it.
+				if (m17_sms_service())
+				    continue;
 			}
 		    audio_spk_close();
 		}
@@ -431,10 +482,7 @@ void *m17_txrx_audio_loopback(void *arg){
     uint8_t payload[16];
     const int gen = m_mode_gen;                 // the mode this thread started for
     while(M17_MODE_OK(gen)){
-        if (audio_backend_pending()) {
-            audio_mic_close(); audio_mic_open();
-            audio_spk_close(); audio_spk_open();
-        }
+        if (audio_backend_pending()) audio_apply_pending();
         // Simplex transmit
 		if( m_ptt == PTT_TX){
 	        audio_input(m_amicsamples,  m_nsam);

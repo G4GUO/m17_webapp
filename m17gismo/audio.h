@@ -42,6 +42,10 @@ typedef enum {
                        // that connected with ?client=phone.  Lets the desk page
                        // be the control surface while the phone is the mic and
                        // the speaker.
+    AROUTE_AI,         // the agent: a client that connected with ?client=ai.
+                       // It owns the microphone and the speaker outright, so an
+                       // assistant can talk and listen without a sound card and
+                       // without stealing audio from the desk page.
     AROUTE_CARD,       // the Pi's sound card, direct through ALSA
     AROUTE_BT,         // the Bluetooth device chosen in "Configure Bluetooth"
     AROUTE_PULSE       // the Pi's sound card through PulseAudio (console only)
@@ -197,6 +201,8 @@ const char *audio_pulse_error(void);
 void audio_web_mic_open(void);
 void audio_web_mic_close(void);
 void audio_web_spk_open(void);
+long audio_web_spk_samples(void);      // samples handed to web clients
+bool audio_web_spk_is_open(void);      // whether the web speaker is attached
 void audio_web_spk_close(void);
 void audio_web_mic_push(const int16_t *s, int len);   // from the WebSocket client
 int  audio_web_mic_available(void);
@@ -211,6 +217,14 @@ bool audio_web_active(void);
 
 // WebSocket sink used by the browser back end, implemented in webui.cpp
 void webui_audio_to_browser(const int16_t *s, int len);
+
+// ---- Microphone from a prepared clip -------------------------------------
+// Play a raw 8 kHz s16le file through the transmitter.  The station reads it at
+// its own pace, so there is no network timing to get wrong: no starving the
+// vocoder and no overflowing its ring.
+void audio_mic_file_set(const char *path);      // "" turns it off
+bool audio_mic_file_active(void);
+bool audio_mic_file_eof(void);
 
 // ---- File back end (audio_file.cpp) --------------------------------------
 void audio_file_set(const char *in_path, const char *out_path);

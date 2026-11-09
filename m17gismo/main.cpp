@@ -12,6 +12,9 @@
 #include <unistd.h>
 #include <string.h>
 #include "m17defines.h"
+#include "m17_ax25.h"
+#include "m17_sms.h"
+#include "bluetooth.h"
 
 static uint8_t m_meta[16];
 static pthread_t m_m17_threads[3];   // radio, command loop, hardware PTT
@@ -160,8 +163,17 @@ int main( int c, char **argv ){
 	gui_open();
     gui_update();
 
+	// AX.25 over M17 starts closed; config.txt decides, if it says anything
+	m17_ax25_init();
+	m17_sms_init();
+
 	// Load initialisation
 	mmi_load_file("config.txt");
+
+	// Keep the Bluetooth view honest: a speaker that is switched off must not
+	// keep showing "connected", and the device list has to pick up what a scan
+	// found.  A no-op where Bluetooth is not available.
+	bt_start_monitor();
 
 	if(pthread_create( &m_m17_threads[0], NULL, m17_txrx_threads, NULL ) != 0 )
     {

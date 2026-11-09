@@ -208,7 +208,18 @@ static long m_tx_push_errors;             // failed pushes: the radio went away
 long pluto_tx_push_errors(void) { return m_tx_push_errors; }
 
 void pluto_tx_flush(void) {
-	m_tx_acc_n = 0;
+	// Send what is left, padded with silence to a whole chunk, and let it go
+	// out.  Discarding it costs the tail of the last frame of every burst -
+	// harmless for a voice over that has already been heard, fatal for a
+	// packet, where the tail of the frame carries the CRC.
+	if (m_pluto_running == false || m_ctx == NULL || m_txbuf == NULL) { m_tx_acc_n = 0; return; }
+	if (m_tx_acc_n > 0) {
+		memset(&m_tx_acc[m_tx_acc_n], 0, sizeof(scmplx)*(size_t)(TX_CHUNK_SAMPLES - m_tx_acc_n));
+		memcpy(m_tx_buff_ptr, m_tx_acc, sizeof(scmplx)*TX_CHUNK_SAMPLES);
+		if (iio_buffer_push(m_txbuf) < 0)
+			m_tx_push_errors++;
+		m_tx_acc_n = 0;
+	}
 }
 
 void pluto_set_tx_buff_length(uint32_t len) {
@@ -358,6 +369,7 @@ int pluto_open( uint32_t block_size ){
 	return 0;
 }
 int pluto_start_tx_stream(void){
+	if (m_pluto_running == false || m_ctx == NULL) return -1;
 //	printf("* Initializing AD9361 IIO TX streaming channels\n");
 	FMC_ERROR(get_ad9361_stream_ch(m_ctx, TX, m_tx, 0, &m_tx0_i),"TX chan i not found");
 	FMC_ERROR(get_ad9361_stream_ch(m_ctx, TX, m_tx, 1, &m_tx0_q),"TX chan q not found");
@@ -374,6 +386,11 @@ void pluto_stop_tx_stream(void){
 }
 int pluto_start_rx_stream(void){
 //	printf("* Initializing AD9361 IIO streaming channels\n");
+	/* No radio open: the station stays up and deaf instead of dying.  Without
+	 * this the receive thread calls libiio with a NULL context and the process
+	 * segfaults inside iio_device_find_channel(), which turns a missing Pluto
+	 * into a crash loop and a web page nobody can reach. */
+	if (m_pluto_running == false || m_ctx == NULL) return -1;
 	FMC_ERROR(get_ad9361_stream_ch(m_ctx, RX, m_rx, 0, &m_rx0_i),"RX chan i not found");
 	FMC_ERROR(get_ad9361_stream_ch(m_ctx, RX, m_rx, 1, &m_rx0_q),"RX chan q not found");
 	iio_channel_enable(m_rx0_i);
@@ -396,15 +413,27 @@ void pluto_set_tx_level(double level) {
 	if (!get_phy_chan(m_ctx, TX, 0, &chn)) { return; }
 	wr_ch_lli(chn, "hardwaregain", (long long int)level);
 }
+/* The configured RX level is applied before the device is open at start-up,
+ * so remember it and re-apply once the stream is running. */
+static double m_rx_level = 40.0;
 void pluto_set_rx_level(double level) {
+	m_rx_level = level;
 	if (m_pluto_running == false) return;
 	if (m_ctx == NULL) return;
-//	if (level > 0) level = 0;
-//	if (level < -89) level = -89;
+	/* RX hardware gain is 0..73 dB, and the part boots in fast_attack AGC,
+	 * which pumps while a burst is still settling: fine for a long voice
+	 * over, fatal for a packet frame that has no forward error correction.
+	 * Manual gain holds still for the whole burst. */
+	if (level < 0) level = 0;
+	if (level > 73) level = 73;
 
 	struct iio_channel *chn = NULL;
 	if (!get_phy_chan(m_ctx, RX, 0, &chn)) { return; }
+	wr_ch_str(chn, "gain_control_mode", "manual");
 	wr_ch_lli(chn, "hardwaregain", (long long int)level);
+}
+void pluto_apply_rx_level(void){
+	pluto_set_rx_level(m_rx_level);
 }
 void pluto_set_tx_freq(long long int freq) {
 	if (m_pluto_running == false) return;
@@ -413,6 +442,28 @@ void pluto_set_tx_freq(long long int freq) {
 	if (!get_lo_chan(m_ctx, TX, &chn)) { return; }
 	wr_ch_lli(chn, "frequency", freq);
 }
+/* Tell the AD9361 what its reference clock actually is.
+ *
+ * It assumes a nominal 40 MHz, and an uncorrected unit is easily 20-50 ppm out -
+ * several kHz at 437 MHz, which no M17 receiver will lock to however healthy
+ * everything else looks.  The value is the MEASURED frequency in Hz, so a slow
+ * crystal is a number BELOW 40000000 and a fast one above.
+ *
+ * It lives in the device's RAM only: a Pluto power cycle forgets it, which is
+ * why the station applies it from config.txt at start-up.
+ */
+int pluto_set_xo_correction(long long int hz)
+{
+    struct iio_device *dev;
+
+    if (m_ctx == NULL)
+        return -1;
+    dev = iio_context_find_device(m_ctx, "ad9361-phy");
+    if (dev == NULL)
+        return -1;
+    return iio_device_attr_write_longlong(dev, "xo_correction", hz);
+}
+
 void pluto_set_rx_freq(long long int freq) {
 	if (m_pluto_running == false) return;
 	struct iio_channel *chn = NULL;

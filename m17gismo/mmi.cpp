@@ -2,9 +2,15 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <math.h>
 #include "m17defines.h"
+#include "m17_ax25.h"
+#include "m17_mailbox.h"
+#include "m17_sms.h"
 #include "audio.h"
 #include "bluetooth.h"
+#include "fargan.h"
+#include "recorder.h"
 #ifdef HAVE_SIM
 #include "radio_sim.h"
 #endif
@@ -77,6 +83,22 @@ static void save_mode_to_config(const char *mode){
 	save_line_to_config("mode", line);
 }
 
+// Put the routes back in step with the Bluetooth selections: a direction that
+// has a device chosen moves to Bluetooth, one without goes back to the sound
+// card.  Per direction, so choosing a speaker does not disturb a microphone
+// that is working - and the choice is kept in config.txt as the route lines the
+// interface writes.
+static void bt_sync_routes(void){
+	AudioRoute out = bt_out_mac()[0] ? AROUTE_BT : AROUTE_CARD;
+	AudioRoute in  = bt_in_mac()[0]  ? AROUTE_BT : AROUTE_CARD;
+	audio_apply_routes(out, in);
+	char line[48];
+	snprintf(line, sizeof(line), "spk %s", audio_route_name(out));
+	save_line_to_config("spk", line);
+	snprintf(line, sizeof(line), "mic %s", audio_route_name(in));
+	save_line_to_config("mic", line);
+}
+
 void mmi_parse(char *cmd){
 	int nt = 0;
 	bool valid = false;
@@ -90,6 +112,82 @@ void mmi_parse(char *cmd){
 		cmd[--cl] = 0;
 	if(cl == 0) return;
 
+	// Optional log of everything received, for an unattended station.
+	//   smslog            state and where it writes
+	//   smslog on|off     turn it on or off, kept for the next start
+	//   smslog file PATH  write somewhere else than sms.log
+	if(strncmp(cmd,"smslog",6)==0 && (cmd[6] == 0 || cmd[6] == ' ')){
+		char line[320];
+		const char *p = cmd + 6;
+		while(*p == ' ') p++;
+		if(strncmp(p,"on",2)==0){
+			m17_sms_set_log(1);
+			save_line_to_config("smslog", "smslog on");
+			snprintf(line, sizeof line, "SMS log on: %s", m17_sms_log_path());
+		}else if(strncmp(p,"off",3)==0){
+			m17_sms_set_log(0);
+			save_line_to_config("smslog", "smslog off");
+			snprintf(line, sizeof line, "SMS log off");
+		}else if(strncmp(p,"file ",5)==0){
+			m17_sms_set_log_path(p + 5);
+			snprintf(line, sizeof line, "smslog file %s", m17_sms_log_path());
+			save_line_to_config("smslog", line);
+			snprintf(line, sizeof line, "SMS log file: %s", m17_sms_log_path());
+		}else{
+			snprintf(line, sizeof line, "SMS log is %s, writing %s",
+			         m17_sms_log() ? "on" : "off", m17_sms_log_path());
+		}
+		printf("%s\n", line);
+		gui_cmd_resp(line);
+		gui_update();
+		return;
+	}
+
+	// SMS takes the rest of the line verbatim, so it is handled before the
+	// tokeniser eats the spaces.  sms <text> sends; sms alone reports.
+	if(strncmp(cmd,"sms",3)==0 && (cmd[3] == 0 || cmd[3] == ' ')){
+		char        line[400];
+		const char *p = cmd + 3;
+		int         st;
+
+		while(*p == ' ') p++;
+		if(*p == 0){
+			// No argument lists what has been heard, which is what a station
+			// without a browser needs.  Newest first, five of them.
+			int shown = m17_sms_count();
+			if(shown > M17_SMS_SHOWN) shown = M17_SMS_SHOWN;
+			if(shown == 0){
+				snprintf(line, sizeof line, "SMS: nothing heard yet, %d characters max - sms <text> sends",
+				         M17_SMS_MAX_TEXT);
+				printf("%s\n", line);
+				gui_cmd_resp(line);
+			}else{
+				for(int i = 0; i < shown; i++){
+					const SmsMsg *m = m17_sms_get(i);
+					if(m == NULL) continue;
+					snprintf(line, sizeof line, "%s [%s] %s", m->time, m->src, m->text);
+					printf("%s\n", line);
+					gui_cmd_resp(line);
+				}
+			}
+		}else{
+			st = m17_sms_queue(p);
+			if(st == 0){
+				int n = (int)strlen(p);
+				if(n > M17_SMS_MAX_TEXT) n = M17_SMS_MAX_TEXT;
+				snprintf(line, sizeof line, "SMS queued, %d characters", n);
+			}else if(st == -2){
+				snprintf(line, sizeof line, "SMS queue full - wait for the last one to go");
+			}else{
+				snprintf(line, sizeof line, "SMS: nothing to send");
+			}
+			printf("%s\n", line);
+			gui_cmd_resp(line);
+		}
+		gui_update();
+		return;
+	}
+
 	token[nt] = strtok(cmd," ");
 	while(token[nt] != NULL){
 		if( ++nt == 10 ) break;
@@ -101,6 +199,110 @@ void mmi_parse(char *cmd){
 	// Comment
 	if(strncmp(token[0],"#",1)==0){
 		valid = true;;
+	}
+
+	// AX.25 over M17 packet mode.  A KISS host (BPQ, Direwolf, kissattach
+	// through kissnetd) connects to the TCP port, hands us AX.25 frames to
+	// transmit, and hears back whatever the receiver decodes.  Off by
+	// default: with packet mode off the port is not even opened and the
+	// voice path is untouched.
+	//
+	//   data                   state and counters
+	//   data on / data off     packet mode, remembered in config.txt
+	//   loopback on|off        build the packet and feed it straight back
+	//                          instead of transmitting (runtime only)
+	//   kissport N             KISS port, default 8001 (runtime only)
+	//
+	// This has to come before the "da" (destination address) test below,
+	// which would otherwise read "data on" as destination "ta".  Loopback and
+	// the port are separate commands on purpose: config.txt keeps the
+	// "data on|off" line by replacing it, and a "data loopback" line would be
+	// swept up by that replacement.
+	if(strncmp(token[0],"data",4)==0){
+		char line[240];
+		if(nt == 1 || strncmp(token[1],"st",2)==0){
+			m17_ax25_status(line, sizeof(line));
+			gui_cmd_resp(line);
+			snprintf(line, sizeof(line), "KISS port %u, source address %s",
+			         m17_ax25_port(),
+			         m17_ax25_call()[0] ? m17_ax25_call() : "(the station sa)");
+			gui_cmd_resp(line);
+			valid = true;
+		} else if(strncmp(token[1],"on",2)==0 || strncmp(token[1],"off",3)==0){
+			bool on = (strncmp(token[1],"on",2)==0);
+			m17_ax25_set_enabled(on);
+			save_line_to_config("data", on ? "data on" : "data off");
+			gui_cmd_resp(on ? "AX.25 packet mode on" : "AX.25 packet mode off");
+			valid = true;
+		}
+	}
+
+	// Framing: which M17 mode carries the AX.25 frames.  Packet mode is the
+	// specified way to carry data; stream mode survives a link that packet mode
+	// does not.  Runtime only, so the two can be compared without a rebuild.
+	if(strncmp(token[0],"framing",7)==0){
+		char text[80];
+		if(nt == 2 && strncmp(token[1],"st",2)==0){
+			m17_ax25_set_framing(1);
+			gui_cmd_resp("AX.25 frames carried in M17 stream mode");
+			valid = true;
+		} else if(nt == 2 && (strncmp(token[1],"pa",2)==0)){
+			m17_ax25_set_framing(0);
+			gui_cmd_resp("AX.25 frames carried in M17 packet mode");
+			valid = true;
+		} else if(nt == 1){
+			snprintf(text, sizeof(text), "AX.25 framing: %s",
+			         m17_ax25_framing() ? "stream" : "packet");
+			gui_cmd_resp(text);
+			valid = true;
+		}
+	}
+
+	// Soft decision metric: the original linear/threshold pair or max-log LLRs.
+	// Runtime only, so the two can be compared on the same frames.
+	if(strncmp(token[0],"demap",5)==0){
+		if(nt == 2 && strncmp(token[1],"ll",2)==0){
+			m17_demap_set_llr(1);
+			gui_cmd_resp("soft decisions: max-log LLR");
+			valid = true;
+		} else if(nt == 2 && strncmp(token[1],"ol",2)==0){
+			m17_demap_set_llr(0);
+			gui_cmd_resp("soft decisions: original linear");
+			valid = true;
+		} else if(nt == 1){
+			gui_cmd_resp(m17_demap_llr_mode() ? "soft decisions: LLR" : "soft decisions: original");
+			valid = true;
+		}
+	}
+
+	// Wire test: run a packet burst through the real receive chain, from ideal
+	// symbol values upwards, so the coding chain is exercised with no radio.
+	if(strcmp(token[0],"wiretest")==0){
+		m17_ax25_wire_test();
+		valid = true;
+	}
+
+	// AX.25 packet loopback: build the burst and feed it straight back into
+	// the receive path, so a KISS host can be exercised with no radio.
+	if(strcmp(token[0],"loopback")==0 && nt == 2){
+		bool on = (strncmp(token[1],"on",2)==0);
+		m17_ax25_set_loopback(on);
+		gui_cmd_resp(on ? "AX.25 loopback on: nothing is transmitted"
+		                : "AX.25 loopback off: packets go to the transmitter");
+		valid = true;
+	}
+
+	// KISS port for the packet host, default 8001.
+	if(strcmp(token[0],"kissport")==0 && nt == 2){
+		unsigned want = (unsigned)atoi(token[1]);
+		char line[64];
+		if(m17_ax25_set_port(want)){
+			snprintf(line, sizeof(line), "AX.25 KISS port %u", m17_ax25_port());
+			gui_cmd_resp(line);
+		} else {
+			gui_cmd_resp("AX.25 cannot listen on that port");
+		}
+		valid = true;
 	}
 
 	// Transmitter Gain
@@ -142,6 +344,29 @@ void mmi_parse(char *cmd){
 			radio_set_rx_frequency(freq);
 			m17_db_set_rx_freq(freq);
 			valid = true;
+		}
+	}
+
+	// Reference clock trim.  The value is the measured XO in Hz, so a slow
+	// crystal is below 40000000.  Changing it moves every frequency the chip
+	// generates, so the current LO is re-applied straight afterwards.
+	if(strncmp(token[0],"xo",2)==0){
+		if(nt == 2){
+			long long hz = atoll(token[1]);
+			if(hz > 39000000 && hz < 41000000){
+				const M17_Dbase *db = m17_get_db();
+				char line[48];
+				pluto_set_xo_correction(hz);
+				radio_set_rx_frequency(db->rx_freq);
+				radio_set_tx_frequency(db->tx_freq);
+				// The chip forgets this at power-off, so keep it for the next start.
+				snprintf(line, sizeof(line), "xo %lld", hz);
+				save_line_to_config("xo", line);
+				valid = true;
+			}else{
+				gui_cmd_resp("xo: give the measured reference in Hz, e.g. xo 39999086");
+				valid = true;
+			}
 		}
 	}
 
@@ -218,7 +443,10 @@ void mmi_parse(char *cmd){
 	// Destination Address.  A leading "#" is dropped: it is not one of the 40 M17
 	// characters (space, A-Z, 0-9, - / .), so "#PARROT" cannot be encoded - and
 	// "PARROT" is what the reflector actually looks for.
-	if(strncmp(token[0],"da",2)==0){
+	// "da" is a two-letter abbreviation, so it also matches "data": without the
+	// second test, every boot that reads "data on" from config.txt also sets the
+	// destination address to "ON".
+	if(strncmp(token[0],"da",2)==0 && strncmp(token[0],"data",4)!=0){
 		char text[16];
 		const char *want = (token[1][0] == '#') ? token[1] + 1 : token[1];
 		pad_address(want, text);
@@ -226,7 +454,9 @@ void mmi_parse(char *cmd){
 		valid = true;
 	}
 	// Broadcast destination Address
-	if(strncmp(token[0],"ba",2)==0){
+	/* Exact match: a two character prefix also caught anything starting with
+	 * "ba", which silently broadcast the transmission. */
+	if(strcmp(token[0],"ba")==0 || strcasecmp(token[0],"broadcast")==0){
 		m17_txrx_set_brd_add();
 		valid = true;
 	}
@@ -303,13 +533,24 @@ void mmi_parse(char *cmd){
 	if(strncmp(token[0],"mode",4) == 0 ){
 		CircuitType want = m17_db_get_chan_type();
 		bool known = true;
-		if(strncmp(token[1],"loop",4) == 0)        want = ASTOAS;
+		if(nt < 2){
+			// A bare "mode" asks which mode is running.  Without this guard the
+			// handler handed a NULL token to strncmp() below and the whole station
+			// segfaulted - a query bringing the radio down.
+			gui_cmd_resp(want == ASTOAS  ? "mode loop"   :
+			             want == DRTODN   ? "mode gate"   :
+			             want == ASTODN   ? "mode client" : "mode radio");
+			valid = true;
+		}
+		else if(strncmp(token[1],"loop",4) == 0)        want = ASTOAS;
 		else if(strncmp(token[1],"radio",5) == 0)  want = DRTOAS;
 		else if(strncmp(token[1],"gate",4) == 0)   want = DRTODN;
 		else if(strncmp(token[1],"client",6) == 0) want = ASTODN;
 		else known = false;
 
-		if(!known){
+		if(nt < 2){
+			/* already answered above */
+		} else if(!known){
 			gui_cmd_resp("mode: radio, loop, gate or client");
 			valid = true;
 		} else {
@@ -338,7 +579,45 @@ void mmi_parse(char *cmd){
 		}
 	}
 
-	if(strncmp(token[0],"w",1)==0){
+	/* The AI link as two directories: the receiver records each over into the
+	 * inbox, and anything that appears in the outbox is transmitted and removed.
+	 * Nothing depends on a socket staying open. */
+	if(strncmp(token[0],"mailbox",7) == 0 && nt >= 2){
+		if(strcasecmp(token[1],"off") == 0){
+			m17_mailbox_set("", "");
+			gui_cmd_resp("mailbox: off");
+		} else {
+			const char *out = (nt >= 3) ? token[2] : NULL;
+			char line[400];
+			m17_mailbox_set(token[1], out);
+			snprintf(line, sizeof(line), "mailbox: inbox %s, outbox %s", token[1],
+			         out ? out : token[1]);
+			gui_cmd_resp(line);
+			snprintf(line, sizeof(line), "mailbox %s %s", token[1], out ? out : token[1]);
+			save_line_to_config("mailbox", line);
+		}
+		valid = true;
+	}
+
+	/* Play a prepared clip through the transmitter.  The station reads the file
+	 * itself, on its own clock, so nothing about network timing can starve the
+	 * vocoder or overflow its ring, and the over ends at the end of the file. */
+	if(strncmp(token[0],"micfile",7) == 0 && nt >= 2){
+		if(strcasecmp(token[1],"off") == 0){
+			audio_mic_file_set("");
+			gui_cmd_resp("microphone: back to the configured route");
+		} else {
+			char line[300];
+			audio_mic_file_set(token[1]);
+			snprintf(line, sizeof(line), "microphone: playing %s", token[1]);
+			gui_cmd_resp(line);
+		}
+		valid = true;
+	}
+
+	/* "w" is the clear-log key in the web UI, but a one character prefix matched
+	 * every command beginning with w - typing "wiretest" also wiped the log. */
+	if(strcmp(token[0],"w")==0 || strcmp(token[0],"clear")==0){
 		gui_update_clear();
 		valid = true;
 	}
@@ -361,10 +640,174 @@ void mmi_parse(char *cmd){
 	// Audio routing: alsa (Pi sound card, direct), pulse (Pi sound card via
 	// PulseAudio), browser (web UI), file, both, none.
 	// "audio alsa plughw:3,0" also selects the ALSA device.
+	//
+	// The interface does not use any of those any more: it selects the speaker
+	// and the microphone separately, with "audio apply spk <route> mic <route>"
+	// (see below).
 	if(strncmp(token[0],"audio",5)==0){
-		if(nt == 2 || nt == 3){
-			if(nt == 3) audio_alsa_set_device(token[2]);
+		if(nt == 1){
+			char line[160];
+			double mg = audio_get_mic_gain(), sv = audio_get_spk_vol();
+			snprintf(line, sizeof(line), "speaker %s, microphone %s",
+			         audio_route_name(audio_get_route(true)),
+			         audio_route_name(audio_get_route(false)));
+			gui_cmd_resp(line);
+			snprintf(line, sizeof(line), "mic gain %d%% (%+.1f dB), speaker volume %d%% (%+.1f dB)",
+			         (int)(mg * 100.0 + 0.5), 20.0 * log10(mg > 0.001 ? mg : 0.001),
+			         (int)(sv * 100.0 + 0.5), 20.0 * log10(sv > 0.001 ? sv : 0.001));
+			gui_cmd_resp(line);
+			snprintf(line, sizeof(line), "alsa %s%s%s", audio_local_device()[0] ? audio_local_device() : "(none)",
+			         audio_backend_error()[0] ? " - " : "", audio_backend_error());
+			gui_cmd_resp(line);
+			valid = true;
+		} else if(nt == 2 || nt == 3){
+			if(nt == 3) audio_set_card_device(token[2]);
+			else        audio_set_card_device("");
 			audio_set_backend(audio_parse_backend(token[1]));
+			valid = true;
+		} else if(nt == 6 && strcmp(token[1], "apply") == 0 &&
+		          strcmp(token[2], "spk") == 0 && strcmp(token[4], "mic") == 0){
+			// The requested configuration, applied: detach what is open for a
+			// direction that changed, attach what was asked for.  A Bluetooth
+			// direction needs a device chosen and connected first, so that is
+			// done here rather than leaving the audio pointing at a PCM that
+			// does not exist yet.
+			AudioRoute want_out = audio_parse_route(token[3]);
+			AudioRoute want_in  = audio_parse_route(token[5]);
+			char line[200];
+			bool bad = false;
+
+			for(int d = 0; d < 2; d++){
+				AudioRoute r = d ? want_in : want_out;
+				if(r != AROUTE_BT) continue;
+				const char *mac = d ? bt_in_mac() : bt_out_mac();
+				const char *nm  = d ? bt_in_name() : bt_out_name();
+				if(mac[0] == 0){
+					snprintf(line, sizeof(line),
+					         "%s: no Bluetooth device chosen - use Configure Bluetooth first",
+					         d ? "microphone" : "speaker");
+					gui_cmd_resp(line);
+					bad = true;
+					continue;
+				}
+				if(!bt_available()){
+					gui_cmd_resp(bt_available_why());
+					bad = true;
+					continue;
+				}
+				if(!bt_connect_sync(mac, 12)){
+					snprintf(line, sizeof(line),
+					         "%s: %s did not answer - it will be attached when it does",
+					         d ? "microphone" : "speaker", nm[0] ? nm : mac);
+					gui_cmd_resp(line);
+				}
+			}
+			if(bad){
+				// Leave the direction that could not be configured where it is,
+				// rather than silently moving the audio somewhere it was not
+				// asked for.
+				if(want_out == AROUTE_BT && bt_out_mac()[0] == 0) want_out = audio_get_route(true);
+				if(want_in  == AROUTE_BT && bt_in_mac()[0]  == 0) want_in  = audio_get_route(false);
+			}
+
+			audio_apply_routes(want_out, want_in);
+
+			{
+				char l2[48];
+				snprintf(l2, sizeof(l2), "spk %s", audio_route_name(want_out));
+				save_line_to_config("spk", l2);
+				snprintf(l2, sizeof(l2), "mic %s", audio_route_name(want_in));
+				save_line_to_config("mic", l2);
+			}
+
+			{
+				char so[64], si[64];
+				if(want_out == AROUTE_BT && bt_out_name()[0])
+					snprintf(so, sizeof(so), "bluetooth (%s)", bt_out_name());
+				else
+					snprintf(so, sizeof(so), "%s", audio_route_name(want_out));
+				if(want_in == AROUTE_BT && bt_in_name()[0])
+					snprintf(si, sizeof(si), "bluetooth (%s)", bt_in_name());
+				else
+					snprintf(si, sizeof(si), "%s", audio_route_name(want_in));
+				snprintf(line, sizeof(line), "speaker: %s, microphone: %s", so, si);
+				gui_cmd_resp(line);
+			}
+			valid = true;
+		}
+	}
+
+	// The two routes, as config.txt records them ("spk bluetooth", "mic
+	// soundcard").  Written by the interface's Configure Audio and by the
+	// Bluetooth commands, so a restart comes back with the same arrangement.
+	// Exactly these two-word forms: nothing else begins "spk" or "mic".
+	if((strcmp(token[0], "spk") == 0 || strcmp(token[0], "mic") == 0) && nt == 2){
+		const char *n = token[1];
+		// "phone"/"android" belong on this list as much as the rest: without them
+		// a "mic phone" line in config.txt was dropped without a word, so a
+		// station whose microphone had been set to the phone came back from every
+		// restart on the sound card - and transmitted a keyed carrier with
+		// nothing on it while the phone's audio was thrown away.
+		bool known = strcasecmp(n, "mute") == 0 || strcasecmp(n, "none") == 0 ||
+		             strcasecmp(n, "browser") == 0 || strcasecmp(n, "web") == 0 ||
+		             strcasecmp(n, "phone") == 0 || strcasecmp(n, "android") == 0 ||
+		             strcasecmp(n, "soundcard") == 0 || strcasecmp(n, "card") == 0 ||
+		             strcasecmp(n, "alsa") == 0 || strcasecmp(n, "bluetooth") == 0 ||
+		             strcasecmp(n, "bt") == 0 || strcasecmp(n, "pulse") == 0;
+		if(known){
+			bool out = (token[0][0] == 's');
+			audio_set_route(out, audio_parse_route(n));
+			valid = true;
+		}
+	}
+
+	// Microphone level and speaker volume: the two controls beside the meters.
+	// Percentages, and applied here on the Pi, between the microphone and the
+	// modulator / between the decoder and the speaker.
+	//
+	//   micgain PCT   0-200 (percent of unity: 100 = 0 dB, 200 = +6 dB)
+	//   spkvol PCT    0-100 (0 = silent, 100 = full scale)
+	if(strncmp(token[0],"micgain",7)==0){
+		if(nt == 1){
+			char line[120];
+			double g = audio_get_mic_gain();
+			snprintf(line, sizeof(line), "microphone gain %d%% (%+.1f dB)",
+			         (int)(g * 100.0 + 0.5), 20.0 * log10(g > 0.001 ? g : 0.001));
+			gui_cmd_resp(line);
+			valid = true;
+		} else if(nt == 2){
+			int pct = atoi(token[1]);
+			if(pct < 0) pct = 0;
+			if(pct > 200) pct = 200;
+			audio_set_mic_gain(pct / 100.0);
+			char line[64];
+			snprintf(line, sizeof(line), "micgain %d", pct);
+			save_line_to_config("micgain", line);
+			snprintf(line, sizeof(line), "microphone gain %d%% (%+.1f dB)", pct,
+			         20.0 * log10(pct / 100.0 > 0.001 ? pct / 100.0 : 0.001));
+			gui_cmd_resp(line);
+			valid = true;
+		}
+	}
+	if(strncmp(token[0],"spkvol",6)==0){
+		if(nt == 1){
+			char line[120];
+			double v = audio_get_spk_vol();
+			snprintf(line, sizeof(line), "speaker volume %d%% (%+.1f dB)",
+			         (int)(v * 100.0 + 0.5), 20.0 * log10(v > 0.001 ? v : 0.001));
+			gui_cmd_resp(line);
+			valid = true;
+		} else if(nt == 2){
+			int pct = atoi(token[1]);
+			if(pct < 0) pct = 0;
+			if(pct > 100) pct = 100;
+			audio_set_spk_vol(pct / 100.0);
+			char line[64];
+			snprintf(line, sizeof(line), "spkvol %d", pct);
+			save_line_to_config("spkvol", line);
+			snprintf(line, sizeof(line), "speaker volume %d%% (%+.1f dB)", pct,
+			         20.0 * log10(pct / 100.0 > 0.001 ? pct / 100.0 : 0.001));
+			gui_cmd_resp(line);
 			valid = true;
 		}
 	}
@@ -433,37 +876,129 @@ void mmi_parse(char *cmd){
 		}
 	}
 
-	// Bluetooth audio: a speaker (A2DP, playback only - the microphone stays on
-	// the sound card) or a headset (HFP, both directions at M17's own 8 kHz,
-	// so nothing is lost against Codec2).  Both need bluealsa on the host; the
-	// station is unchanged without it and this says why.
+	// Recording: writes what the receiver decodes - the same audio that goes to
+	// the speaker, whichever decoder produced it - as a mono 8 kHz WAV, so a
+	// classic example and a neural one can be compared directly.  Deliberately
+	// not kept in config.txt: a station that started recording itself after a
+	// reboot would fill its own disk.
+	//
+	//   record            is it recording, and where
+	//   record on [file]  start (default rx-<date>-<time>.wav in the working directory)
+	//   record off        close it
+	if(strncmp(token[0],"record",6)==0){
+		if(nt == 1){
+			if(rec_active()){
+				unsigned long n; unsigned int sec;
+				char line[200];
+				rec_stats(&n, &sec);
+				snprintf(line, sizeof(line), "recording to %s at %d Hz, %u s",
+				         rec_file(), rec_rate(), sec);
+				gui_cmd_resp(line);
+			} else if(rec_file()[0]){
+				char line[200];
+				snprintf(line, sizeof(line), "not recording; last file %s", rec_file());
+				gui_cmd_resp(line);
+			} else {
+				gui_cmd_resp("not recording: record on starts, record off stops");
+			}
+			valid = true;
+		} else if(strncmp(token[1],"on",2)==0){
+			char line[200];
+			// The rate follows the decoder in use: FARGAN synthesises at 16 kHz and
+			// that is what is worth keeping, the classic decoder gives 8 kHz.
+			int rate = fargan_rx_enabled() ? 16000 : 8000;
+			if(rec_start(nt >= 3 ? token[2] : NULL, rate))
+				snprintf(line, sizeof(line), "recording to %s at %d Hz", rec_file(), rec_rate());
+			else
+				snprintf(line, sizeof(line), "cannot record: %s", rec_error());
+			gui_cmd_resp(line);
+			valid = true;
+		} else if(strncmp(token[1],"off",3)==0){
+			char line[200];
+			rec_stop();
+			snprintf(line, sizeof(line), "recording stopped: %s", rec_file());
+			gui_cmd_resp(line);
+			valid = true;
+		}
+	}
+
+	// The neural receiver: M17-Project/Codec2-mod-neural replaces only the
+	// receiver's synthesis step, so the same 8-byte Codec2 3200 frames come back
+	// at 16 kHz instead of 8 kHz.  The bitstream, the transmitter and every other
+	// station are untouched, and it costs about half a core of the Pi while
+	// receiving - hence a setting rather than the default.
+	//
+	//   fargan          is it built in, and is it on
+	//   fargan on       receive through FARGAN (16 kHz, decimated to the audio path)
+	//   fargan off      back to the classic decoder
+	if(strncmp(token[0],"fargan",6)==0){
+		if(nt == 1){
+			if(!fargan_rx_compiled())
+				gui_cmd_resp("neural receiver not built in (make NEURAL=1 CODEC2_BACKEND=mod)");
+			else
+				gui_cmd_resp(fargan_rx_enabled() ? "neural receiver on: FARGAN synthesises received frames"
+				                                 : "neural receiver off: the classic decoder");
+			valid = true;
+		} else if(nt == 2 && (strncmp(token[1],"on",2)==0 || strncmp(token[1],"off",3)==0)){
+			bool on = (strncmp(token[1],"on",2)==0);
+			if(on && !fargan_rx_compiled()){
+				gui_cmd_resp("neural receiver not built in (make NEURAL=1 CODEC2_BACKEND=mod)");
+			} else {
+				fargan_rx_set(on);
+				save_line_to_config("fargan", on ? "fargan on" : "fargan off");
+				gui_cmd_resp(on ? "neural receiver on: FARGAN at 16 kHz, decimated to the audio path"
+				                : "neural receiver off: the classic decoder");
+			}
+			valid = true;
+		}
+	}
+
+	// Bluetooth audio.  Output and microphone are chosen *separately*: an A2DP
+	// speaker for the sound while the microphone stays on the sound card, or a
+	// headset for one direction and another device for the other.
 	//
 	//   bt                    what is known, and what is in use
-	//   bt use MAC speaker    trust it, connect, send the audio to it
-	//   bt use MAC headset    ...as a headset, microphone included
+	//   bt spk MAC            output through that device (A2DP)
+	//   bt spk MAC sco        output through it as HFP instead
+	//   bt spk off            output back to the sound card
+	//   bt mic MAC            microphone through that device (HFP)
+	//   bt mic off            microphone back to the sound card
+	//   bt use MAC speaker    the old form: output only
+	//   bt use MAC headset    the old form: both directions on that device
+	//   bt pair MAC           pair and trust a device the scan found
 	//   bt scan               look for devices for 20 s
-	//   bt off                back to the sound card
-	//   btdev MAC ROLE        the config.txt form: remembers, does not connect
+	//   bt off                both directions back to the sound card
+	//   btspk MAC [a2dp|sco]  the config.txt form: remembers, does not connect
+	//   btmic MAC             the config.txt form for the microphone
+	//   btdev MAC ROLE        the older config.txt form, still read
 	if(strncmp(token[0],"bt",2)==0){
-		if(strncmp(token[0],"btdev",5)==0){
-			char play[160], cap[160];
+		char line[160];
+
+		if(strncmp(token[0],"btspk",5)==0 || strncmp(token[0],"btmic",5)==0){
+			// Startup forms.  No connection attempt: bluealsa reconnects to a
+			// trusted device itself, and a device that is not there leaves the
+			// audio on the card rather than going silent.
+			bool spk = (strncmp(token[0],"btspk",5) == 0);
+			if(nt == 2 && strncmp(token[1],"off",3) == 0){
+				if(spk) bt_set_output(NULL, NULL);
+				else    bt_set_input(NULL);
+			} else if(spk && (nt == 2 || nt == 3)){
+				bt_set_output(token[1], nt == 3 ? token[2] : "a2dp");
+			} else if(!spk && nt == 2){
+				bt_set_input(token[1]);
+			}
+			bt_sync_routes();
+			valid = true;
+		} else if(strncmp(token[0],"btdev",5)==0){
 			if(nt == 2 && strncmp(token[1],"off",3)==0){
 				bt_clear();
-				audio_alsa_set_device("");
-				audio_alsa_set_capture_device("");
+				bt_sync_routes();
 				valid = true;
 			} else if(nt == 3 && bt_set_active(token[1], token[2])){
-				// Startup: no connection attempt here.  bluealsa reconnects to a
-				// trusted device itself, and if it is not there the audio falls
-				// back to the card instead of going silent.
-				bt_alsa_devices(play, sizeof(play), cap, sizeof(cap));
-				audio_alsa_set_device(play);
-				if(cap[0]) audio_alsa_set_capture_device(cap);
-				else       audio_alsa_capture_follow_card();
+				bt_sync_routes();
 				valid = true;
 			}
 		} else if(nt == 1){
-			char line[160];
 			if(!bt_available()){
 				gui_cmd_resp(bt_available_why());
 			} else {
@@ -471,16 +1006,24 @@ void mmi_parse(char *cmd){
 				snprintf(line, sizeof(line), "adapter %s%s", bt_adapter(),
 				         bt_powered() ? "" : " (powered off)");
 				gui_cmd_resp(line);
-				if(bt_active_mac()[0])
-					snprintf(line, sizeof(line), "using %s %s%s", bt_active_role(),
-					         bt_active_name()[0] ? bt_active_name() : bt_active_mac(),
-					         bt_active_connected() ? "  (connected)" : "  (not connected)");
-				else
-					snprintf(line, sizeof(line), "using the sound card");
+				snprintf(line, sizeof(line), "speaker: %s%s",
+				         bt_out_mac()[0] ? (bt_out_name()[0] ? bt_out_name() : bt_out_mac())
+				                         : "the sound card",
+				         bt_out_mac()[0] ? (bt_out_connected() ? "  (connected)" : "  (not connected)")
+				                         : "");
+				gui_cmd_resp(line);
+				snprintf(line, sizeof(line), "microphone: %s%s",
+				         bt_in_mac()[0] ? (bt_in_name()[0] ? bt_in_name() : bt_in_mac())
+				                        : "the sound card",
+				         bt_in_mac()[0] ? (bt_in_connected() ? "  (connected)" : "  (not connected)")
+				                        : "");
 				gui_cmd_resp(line);
 				for(int i = 0; i < bt_count(); i++){
-					snprintf(line, sizeof(line), "%s  %s%s", bt_mac(i), bt_name(i),
-					         bt_connected(i) ? "  (connected)" : "");
+					snprintf(line, sizeof(line), "%s  %s%s%s%s%s", bt_mac(i), bt_name(i),
+					         bt_connected(i) ? "  (connected)" : "",
+					         bt_paired(i)    ? "" : "  (not paired)",
+					         strcmp(bt_out_mac(), bt_mac(i)) == 0 ? "  [speaker]" : "",
+					         strcmp(bt_in_mac(),  bt_mac(i)) == 0 ? "  [mic]" : "");
 					gui_cmd_resp(line);
 				}
 				if(bt_count() == 0) gui_cmd_resp("nothing known yet: bt scan looks for devices");
@@ -496,15 +1039,111 @@ void mmi_parse(char *cmd){
 			valid = true;
 		} else if(nt == 2 && strncmp(token[1],"off",3)==0){
 			bt_clear();
-			audio_alsa_set_device("");
-			audio_alsa_set_capture_device("");
-			audio_set_backend(audio_parse_backend("alsa"));
-			save_line_to_config("btdev", "btdev off");
-			gui_cmd_resp("audio back on the sound card");
+			bt_sync_routes();
+			save_line_to_config("btspk", "btspk off");
+			save_line_to_config("btmic", "btmic off");
+			gui_cmd_resp("speaker and microphone back on the sound card");
 			valid = true;
+		} else if(nt >= 4 && strncmp(token[1],"sel",3)==0 &&
+		          (strncmp(token[2],"spk",3)==0 || strncmp(token[2],"mic",3)==0)){
+			// "bt sel spk MAC" / "bt sel mic MAC": choose and connect a device
+			// WITHOUT moving the audio there.  This is what the interface's
+			// Configure Bluetooth does - picking a device and connecting it -
+			// leaving Configure Audio to attach it, so nothing changes under a
+			// half-filled request.
+			bool spk = (strncmp(token[2],"spk",3) == 0);
+			const char *mac = token[3];
+			if(strncmp(mac,"off",3) == 0){
+				if(spk){ bt_set_output(NULL, NULL); save_line_to_config("btspk", "btspk off"); }
+				else   { bt_set_input(NULL);        save_line_to_config("btmic", "btmic off"); }
+				gui_cmd_resp(spk ? "speaker device cleared (the routes are unchanged)"
+				                 : "microphone device cleared (the routes are unchanged)");
+				valid = true;
+			} else if(!bt_valid_mac(mac)){
+				gui_cmd_resp("not a Bluetooth address (xx:xx:xx:xx:xx:xx)");
+			} else if(!bt_available()){
+				gui_cmd_resp(bt_available_why());
+			} else {
+				bool wanted_a2dp = (nt < 5 || strcmp(token[4], "sco") != 0);
+				if(spk) bt_set_output(mac, wanted_a2dp ? "a2dp" : "sco");
+				else    bt_set_input(mac);
+				bool up = bt_connect_sync(mac, 12);
+				if(spk){
+					// bt_set_output() may have chosen HFP for a device with no
+					// A2DP, so save what is really in use, not what was asked.
+					snprintf(line, sizeof(line), "btspk %s %s", mac, bt_out_profile());
+					save_line_to_config("btspk", line);
+				} else {
+					snprintf(line, sizeof(line), "btmic %s", mac);
+					save_line_to_config("btmic", line);
+				}
+				if(spk && wanted_a2dp && strcmp(bt_out_profile(), "sco") == 0)
+					snprintf(line, sizeof(line),
+					         "speaker device chosen (HFP: this device has no A2DP)%s - Configure Audio attaches it",
+					         up ? "" : ", not answering yet");
+				else
+					snprintf(line, sizeof(line), "%s device chosen%s - Configure Audio attaches it",
+					         spk ? "speaker" : "microphone",
+					         up ? "" : ", not answering yet");
+				gui_cmd_resp(line);
+				valid = true;
+			}
+		} else if(nt == 3 && strncmp(token[1],"pair",4)==0){
+			// A device found by a scan is only discovered: nothing will connect
+			// it until it is paired, and a one-shot bluetoothctl registers no
+			// pairing agent unless it is asked for one.
+			const char *mac = token[2];
+			if(!bt_valid_mac(mac)){
+				gui_cmd_resp("not a Bluetooth address (xx:xx:xx:xx:xx:xx)");
+			} else if(!bt_available()){
+				gui_cmd_resp(bt_available_why());
+			} else if(bt_pair_sync(mac, 20)){
+				bt_refresh();
+				gui_cmd_resp("paired and trusted - now choose speaker or microphone");
+			} else {
+				gui_cmd_resp("pairing failed: the device may want a PIN, or be out of range");
+			}
+			valid = true;
+		} else if(nt >= 3 && (strncmp(token[1],"spk",3)==0 || strncmp(token[1],"mic",3)==0)){
+			// One direction at a time: "bt spk MAC" moves the speaker only, so
+			// the microphone can stay where it is (on the card, or on another
+			// device).  "bt spk MAC sco" asks for HFP instead of A2DP.
+			bool spk = (strncmp(token[1],"spk",3) == 0);
+			const char *mac = token[2];
+			if(nt == 2 || (nt == 3 && strncmp(mac,"off",3) == 0)){
+				if(spk){ bt_set_output(NULL, NULL); save_line_to_config("btspk", "btspk off"); }
+				else    { bt_set_input(NULL);       save_line_to_config("btmic", "btmic off"); }
+				bt_sync_routes();
+				gui_cmd_resp(spk ? "speaker back on the sound card" : "microphone back on the sound card");
+				valid = true;
+			} else if(!bt_valid_mac(mac)){
+				gui_cmd_resp("not a Bluetooth address (xx:xx:xx:xx:xx:xx)");
+			} else if(!bt_available()){
+				gui_cmd_resp(bt_available_why());
+			} else {
+				const char *prof = (nt == 4 && bt_valid_profile(token[3])) ? token[3] : "a2dp";
+				if(spk){ bt_set_output(mac, prof); prof = bt_out_profile(); }
+				else   { bt_set_input(mac); }
+				bool up = bt_connect_sync(mac, 12);
+				bt_sync_routes();
+				bt_connect_async(mac);
+				if(spk){
+					snprintf(line, sizeof(line), "btspk %s %s", mac, prof);
+					save_line_to_config("btspk", line);
+					if(!up) gui_cmd_resp("the device did not answer yet; the audio will move when it does");
+					else    gui_cmd_resp(prof[0] == 's' ? "speaker: HFP output (8 kHz)"
+					                                   : "speaker: A2DP output (the microphone stays where it is)");
+				} else {
+					snprintf(line, sizeof(line), "btmic %s", mac);
+					save_line_to_config("btmic", line);
+					if(!up) gui_cmd_resp("the device did not answer yet; the microphone will move when it does");
+					else    gui_cmd_resp("microphone: through the headset (HFP, 8 kHz)");
+				}
+				valid = true;
+			}
 		} else if(nt == 3 || (nt == 4 && strncmp(token[1],"use",3) == 0)){
-			// "bt <mac> speaker" and "bt use <mac> speaker" are both accepted.
-			char play[160], cap[160], line[96];
+			// "bt <mac> speaker" and "bt use <mac> speaker" are both accepted,
+			// and are the shorthand for "put this direction on this device".
 			const char *mac  = token[nt - 2];
 			const char *role = token[nt - 1];
 			if(!bt_valid_mac(mac)){
@@ -514,21 +1153,22 @@ void mmi_parse(char *cmd){
 			} else if(!bt_set_active(mac, role)){
 				gui_cmd_resp("the role is speaker or headset");
 			} else {
-				// Connect first: bluealsa only creates the PCM once the
-				// profile is up, and pointing the audio at a PCM that is not
-				// there yet would just fall back to the sound card.
 				bool up = bt_connect_sync(mac, 12);
-				bt_alsa_devices(play, sizeof(play), cap, sizeof(cap));
-				audio_alsa_set_device(play);
-				if(cap[0]) audio_alsa_set_capture_device(cap);
-				else       audio_alsa_capture_follow_card();
-				audio_set_backend(audio_parse_backend("alsa"));
-				bt_connect_async(mac);   // and keep it connected from now on
-				if(!up) gui_cmd_resp("the device did not answer; the audio stays on the sound card");
-				snprintf(line, sizeof(line), "btdev %s %s", mac, role);
-				save_line_to_config("btdev", line);
-				gui_cmd_resp(cap[0] ? "headset: talk and listen through it (HFP, 8 kHz)"
-				                    : "speaker: the microphone stays on the sound card");
+				bt_sync_routes();
+				bt_connect_async(mac);
+				if(!up) gui_cmd_resp("the device did not answer; the audio stays where it was");
+				if(strcmp(role,"speaker") == 0){
+					snprintf(line, sizeof(line), "btspk %s %s", mac, bt_out_profile());
+					save_line_to_config("btspk", line);
+				} else {
+					snprintf(line, sizeof(line), "btspk %s sco", mac);
+					save_line_to_config("btspk", line);
+					snprintf(line, sizeof(line), "btmic %s", mac);
+					save_line_to_config("btmic", line);
+				}
+				gui_cmd_resp(strcmp(role,"headset") == 0
+				             ? "headset: talk and listen through it (HFP, 8 kHz)"
+				             : "speaker: the microphone stays where it is");
 				valid = true;
 			}
 		}
@@ -556,8 +1196,9 @@ void mmi_parse(char *cmd){
 	}
 #endif
 
-	// Help
-	if(strncmp(token[0],"h",1)==0){
+	// Help.  Exact, so a mistyped command still reports "Invalid command" rather
+	// than silently printing the help through a one character prefix match.
+	if(strcmp(token[0],"h")==0 || strcmp(token[0],"help")==0 || strcmp(token[0],"?" )==0){
 		help();
 		valid = true;
 	}

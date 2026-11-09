@@ -58,6 +58,9 @@ typedef struct{
 	uint8_t type;
 	uint8_t gerr;
 	float variance;
+	float best;                 // correlation sum of the winning pattern
+	float second;               // and of the runner-up: the margin is what tells
+	                            // a real sync from a coincidence
 }M17Sync;
 
 #define CCT_PACKET   0
@@ -196,7 +199,9 @@ int  pluto_start_rx_stream(void);
 void pluto_stop_rx_stream(void);
 void pluto_set_tx_level(double level);
 void pluto_set_rx_level(double level);
+void pluto_apply_rx_level(void);
 void pluto_agc_type(AgcType type);
+int  pluto_set_xo_correction(long long int hz);   /* measured XO in Hz */
 void pluto_set_tx_freq(long long int freq);
 void pluto_set_rx_freq(long long int freq);
 void pluto_get_tx_freq(long long int *freq);
@@ -209,6 +214,7 @@ void pluto_read_rssi_value(long long int *rssi);
 uint32_t pluto_rx_samples( scmplx *s );
 void pluto_tx_samples( scmplx *s, int len);
 void pluto_tx_flush(void);          // drop the transmit accumulator (start of an over)
+long pluto_tx_push_errors(void);    // sample buffers the radio refused
 
 void pluto_transmit(void);
 void pluto_receive(void);
@@ -226,6 +232,7 @@ void radio_set_tx_frequency(uint64_t freq);
 void radio_set_rx_frequency(uint64_t freq);
 int  radio_receive_samples( scmplx *s, uint32_t n);
 int  radio_transmit_samples( scmplx *s, uint32_t n);
+void radio_silence(int ms);
 void radio_set_tx_gain(float gain);
 void radio_set_rx_gain(float gain);
 void radio_set_afc_on(void);
@@ -263,6 +270,8 @@ scmplx *m17_dsp_update_buffer( scmplx *in, int flen, int blen);
 //
 
 void m17_dsp_demap_symbol(float in, float mag, float *out);
+void m17_demap_set_llr(int on);
+int  m17_demap_llr_mode(void);
 void m17_dsp_demap_frame(float *in, float *out);
 
 int  audio_main(void);
@@ -362,6 +371,7 @@ bool m17_tx_gnss_enabled(void);
 void m17_tx_set_gnss_enabled(bool on);
 
 void m17_send_link_setup_frame(uint48_t dest, uint48_t src, M17Type type, uint8_t *meta);
+void m17_send_noise_preamble(void);
 void m17_send_link_setup_frame_to_net(uint48_t dest, uint48_t src, M17Type type, uint8_t *meta);
 void m17_send_link_setup_frame_fm_net(uint8_t *net);
 void m17_send_stream_frame( uint8_t *payload);
@@ -379,6 +389,7 @@ void m17_mod_tx(int16_t *s, int len);
 void m17_mod_init(void);
 // Send stream of dibits
 void m17_mod_dibits(uint8_t *dibits, int len);
+void m17_mod_flush(void);
 // Send carrier
 void m17_mod_carrier(void);
 
@@ -393,7 +404,8 @@ void m17_rx_init(void);
 bool m17_rx_lock(void);
 
 // rx parser
-void m17_rx_parse(float *sb, uint8_t type);
+void m17_rx_parse(float *s, uint8_t type);
+extern int m17_rx_type_count[6];
 void m17_rx_parse_los(void);
 void m17_rx_parse_aos(void);
 
@@ -561,6 +573,7 @@ const char *gps_device(void);
 int  gps_baud(void);
 const char *gps_status(void);                     // last open/reopen result
 bool gps_fix_fresh(int max_age_ms);               // valid fix within max_age_ms
+bool gps_have_position(void);                     // a fix has been seen at some point
 uint32_t gps_fix_age_ms(void);                    // age of the last fix, ms
 bool gps_rx_position(GpsMsg *out, char *src, int n);  // last position heard from another station
 double gps_bearing(double lat1, double lon1, double lat2, double lon2);   // degrees true

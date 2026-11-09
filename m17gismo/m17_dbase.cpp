@@ -1,5 +1,6 @@
 #include <string.h>
 #include "m17defines.h"
+#include "m17_mailbox.h"
 
 
 M17_Dbase m17_db;
@@ -61,6 +62,7 @@ bool m17_db_is_for_me(uint48_t add ){
 	return r;
 }
 void m17_aos(void){
+    m17_mailbox_aos();
     m17_db.g_errors = 0;
     m17_db.n_frames = 0;
     m17_db.in_frame = true;
@@ -69,6 +71,7 @@ void m17_aos(void){
 //    printf("AOS\n");
 }
 void m17_los(void){
+    m17_mailbox_los();
 //	float ber = (100.0*m17_db.g_errors)/(m17_db.n_frames*24.0);
     m17_db.in_frame = false;
     gui_los();

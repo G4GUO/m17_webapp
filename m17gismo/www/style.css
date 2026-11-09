@@ -9,6 +9,9 @@
   --green: #3ecf8e;
   --amber: #ffb020;
   --red: #ff5c5c;
+  --tan: #d3b18a;         /* SMS: light brown, readable on the dark panel */
+  --tan-dim: #a8855c;
+  --tan-bg: #5e4228;
   font-size: 15px;
 }
 * { box-sizing: border-box; }
@@ -25,7 +28,59 @@ header h1 { font-size: 1.15rem; margin: 0; letter-spacing: .06em; color: var(--a
 .hdr-item { display: flex; gap: .4rem; align-items: baseline; }
 .hdr-item .lbl { color: var(--dim); font-size: .75rem; text-transform: uppercase; }
 .hdr-item .val { font-weight: 600; }
+.hdr-item.diag { align-items: center; cursor: pointer; user-select: none; }
+.hdr-item.diag input { margin: 0; }
+/* SMS: the list is newest first, and each line carries the time, the station it
+   came from and the text - a message is unreadable without the first two.  The
+   callsign is bracketed in the text too, so it is obvious where the message
+   starts even when the colour is lost in a screenshot or a printout. */
+#smscard { border-color: rgba(211, 177, 138, .55);
+           background: linear-gradient(180deg, rgba(94, 66, 40, .28), rgba(23, 28, 34, .35) 70%); }
+#smscard h2 { color: var(--tan); }
+#smscard h2 .lbl { color: var(--tan-dim); }
+#smslist { max-height: 12rem; overflow-y: auto; margin-top: .4rem; }
+.sms { padding: .22rem .35rem; border-left: 2px solid rgba(211, 177, 138, .45);
+       margin-bottom: .2rem; background: rgba(94, 66, 40, .16); border-radius: 0 3px 3px 0;
+       font-size: .78rem; line-height: 1.45; }
+.sms:first-child { border-left-color: var(--tan); background: rgba(94, 66, 40, .34); }
+.smst { color: var(--tan-dim); margin-right: .5rem; font-size: .72rem; }
+.smss { color: var(--tan); font-weight: 600; margin-right: .5rem; }
+.smstx { color: var(--fg); white-space: pre-wrap; word-break: break-word; }
+#smsinput { flex: 1; background: rgba(94, 66, 40, .18); border-color: rgba(211, 177, 138, .40); }
+#smshint { margin-top: .2rem; color: var(--tan-dim); }
+#smssend { background: rgba(94, 66, 40, .55); border-color: rgba(211, 177, 138, .55); color: #f3e3cd; }
+#smssend:hover { background: rgba(120, 84, 48, .70); }
+
+/* Help search box: part of the help card, sized to the card not the page */
+#helpsearch { width: 100%; font-size: .78rem; padding: .2rem .4rem; }
+
+/* A control whose effect is only visible elsewhere gets a brief highlight, so a
+   button press is never silent. */
+input.flash { animation: flash .8s ease-out; }
+@keyframes flash {
+  0%   { border-color: var(--accent); background: rgba(90,160,255,.25); }
+  100% { border-color: var(--line); background: var(--panel2); }
+}
+
+/* Diagnostics off: a clean panel.  The command help is reference material for
+   the command line, so it goes; the console card stays, because the command
+   input lives in it and a reply is only worth having if you can see it.  The
+   counters that only matter while debugging go too; nothing that shows what the
+   station is doing (PTT lamp, frame direction, meters) is affected. */
+body.no-diag #helpcard,
+body.no-diag #hwinfo,
+body.no-diag #txdrops { display: none; }
+/* The audio box writes its own status lines and colours them green, amber or red
+   from the state, which is useful when the audio is not behaving and noise the
+   rest of the time.  The same switch hides them; the routing itself stays
+   visible in the Audio heading badge. */
+body.no-diag #audiostatus,
+body.no-diag #micin,
+body.no-diag #audioerr,
+body.no-diag #farganstat,
+body.no-diag #recstat { display: none; }
 .link { margin-left: auto; padding: .15rem .6rem; border-radius: 1rem; font-size: .8rem; font-weight: 600; }
+.note.gpsstale { opacity: .55; }
 .stale {
   background: rgba(255,176,32,.15); color: var(--amber); border-bottom: 1px solid rgba(255,176,32,.45);
   padding: .4rem .8rem; font-size: .85rem; text-align: center;
@@ -33,46 +88,51 @@ header h1 { font-size: 1.15rem; margin: 0; letter-spacing: .06em; color: var(--a
 .link.on { background: rgba(62,207,142,.15); color: var(--green); }
 .link.off { background: rgba(255,92,92,.15); color: var(--red); }
 
-main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 30rem); gap: .7rem; padding: .7rem; align-items: start; }
+main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(330px, 27rem); gap: .5rem; padding: .45rem .5rem; align-items: start; }
 /* The left column stacks two cards across; the console column stays one wide, short column */
-.col { display: grid; grid-template-columns: 1fr 1fr; gap: .7rem; align-content: start; }
+.col { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; align-content: start; }
 .col.wide { grid-template-columns: minmax(0, 1fr); }
 .col > .span2 { grid-column: 1 / -1; }
 @media (max-width: 1000px) { main { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 760px) { .col { grid-template-columns: minmax(0, 1fr); } }
 
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: .6rem; padding: .55rem .65rem; }
-.card h2 { margin: 0 0 .45rem; font-size: .78rem; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
-.row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-top: .5rem; }
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem .8rem; }
-label { display: flex; flex-direction: column; gap: .2rem; font-size: .8rem; color: var(--dim); }
-label.chk { flex-direction: row; align-items: center; gap: .4rem; color: var(--fg); font-size: .85rem; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: .6rem; padding: .34rem .5rem; }
+.card h2 { margin: 0 0 .2rem; font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; color: var(--dim); }
+.row { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; margin-top: .26rem; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .26rem .6rem; }
+label { display: flex; flex-direction: column; gap: .06rem; font-size: .73rem; color: var(--dim); }
+label.chk { flex-direction: row; align-items: center; gap: .3rem; color: var(--fg); font-size: .8rem; }
 input, select, button {
   background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
-  border-radius: .35rem; padding: .4rem .5rem; font: inherit; font-size: .9rem;
+  border-radius: .35rem; padding: .19rem .4rem; font: inherit; font-size: .8rem;
 }
 input[type=range] { padding: 0; }
 input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 0; }
 button { cursor: pointer; }
 button:hover { border-color: var(--accent); }
 button:disabled { opacity: .45; cursor: not-allowed; }
-button.mini { font-size: .8rem; padding: .25rem .5rem; }
+button.mini { font-size: .76rem; padding: .18rem .45rem; }
 
 /* The receive and transmit controls stack, with short sliders: side by side in a
    wide card, the gain sliders stretch across the whole card. */
-.radio-stack { display: flex; flex-direction: column; gap: .4rem; }
+.radio-stack { display: flex; flex-direction: column; gap: .28rem; }
 
 /* Reflector: a picker for the list, and a field for anything not in it.  A
    datalist alone only suggests entries while you are typing, which loses the
    clickable list Firefox users expect. */
-.refrow { display: flex; flex-direction: column; gap: .3rem; }
+.refrow { display: flex; flex-direction: row; gap: .4rem; flex-wrap: wrap; }
+.refrow select, .refrow input { flex: 1 1 8rem; min-width: 0; }
+.row.tight { margin-top: 0; gap: .35rem; }
 .radio-stack input[type=range] { max-width: 11rem; }
 .radio-stack label { max-width: 20rem; }
 
-/* Push to talk: the last card of the grid, in the right hand column, so it sits
-   at the bottom right of the panel area and lines up with the cards above it. */
-.ptt { grid-column: 2; display: flex; flex-direction: column; gap: .5rem; }
-@media (max-width: 760px) { .ptt { grid-column: auto; } }
+/* Push to talk: last card of the console column.  It used to sit in the second
+   column of the left panel grid, and a leftover `grid-column: 2` here made the
+   single column console section invent a second implicit column - which squeezed
+   the console card to 45px and pushed it under the help box. */
+.ptt { display: flex; flex-direction: column; gap: .4rem; }
+/* The meters sit at the top of the card: they are what you glance at */
+.ptt .row.meters { margin-top: 0; }
 .pttstate { display: flex; align-items: center; gap: .6rem; }
 .led {
   font-weight: 800; letter-spacing: .1em; padding: .25rem .8rem; border-radius: .35rem;
@@ -83,9 +143,12 @@ button.mini { font-size: .8rem; padding: .25rem .5rem; }
 .badge { font-size: .75rem; color: var(--dim); border: 1px solid var(--line); border-radius: 1rem; padding: .1rem .6rem; }
 .badge.ok { color: var(--green); border-color: rgba(62,207,142,.45); }
 .badge.sig { color: var(--amber); border-color: rgba(255,176,32,.45); }
+/* Red while this station is on air, so our own bursts cannot be mistaken for
+   someone else's. */
+.badge.tx { color: var(--red); border-color: rgba(255,92,92,.5); background: rgba(255,92,92,.12); }
 
 .ptt-button {
-  padding: .8rem; font-size: 1.05rem; font-weight: 700; letter-spacing: .04em;
+  padding: .5rem; font-size: 1.05rem; font-weight: 700; letter-spacing: .04em;
   background: linear-gradient(180deg, #2a3a4d, #1d2833); border: 1px solid var(--line);
 }
 .ptt-button .hint { display: block; font-size: .7rem; font-weight: 400; color: var(--dim); }
@@ -93,16 +156,37 @@ button.mini { font-size: .8rem; padding: .25rem .5rem; }
 .ptt-button:disabled { filter: grayscale(.6); }
 
 /* Bluetooth audio dialog */
-#btdlg {
+#btdlg, #audiodlg {
   min-width: 32rem; max-width: 46rem; background: var(--panel); color: inherit;
   border: 1px solid var(--line); border-radius: .5rem; padding: 1rem;
 }
-#btdlg::backdrop { background: rgba(0,0,0,.55); }
-#btdlg h2 { margin: 0 0 .5rem; font-size: 1rem; }
+#btdlg::backdrop, #audiodlg::backdrop { background: rgba(0,0,0,.55); }
+#btdlg h2, #audiodlg h2 { margin: 0 0 .5rem; font-size: 1rem; }
+
+/* Audio configuration: the speaker's four choices beside the microphone's */
+.cfgcols { display: flex; gap: .8rem; flex-wrap: wrap; margin: .6rem 0 .2rem; }
+fieldset.cfgcol {
+  flex: 1 1 13rem; border: 1px solid var(--line); border-radius: .4rem;
+  padding: .45rem .6rem .55rem; display: flex; flex-direction: column; gap: .3rem;
+}
+fieldset.cfgcol legend { color: var(--dim); font-size: .74rem; text-transform: uppercase; letter-spacing: .08em; padding: 0 .3rem; }
+fieldset.cfgcol label.chk { font-size: .85rem; }
+button.wide { flex: 1 1 auto; }
+
+/* The level meters, and the two level controls under them */
+.vu { display: flex; gap: .35rem; flex-wrap: nowrap; margin-top: 0; align-items: flex-end; }
+.vu .sliders { display: flex; flex-direction: column; gap: .2rem; flex: 1 1 auto; min-width: 6rem; }
+label.slider { flex: 1 1 7rem; min-width: 6rem; }
+.lbl.inline { flex-direction: row; align-items: center; gap: .3rem; }
+label.slider output { color: var(--fg); font-variant-numeric: tabular-nums; }
+label.slider input[type=range] { width: 100%; max-width: 12rem; }
 .btlist {
   display: flex; flex-direction: column; gap: .35rem;
   margin: .6rem 0; max-height: 16rem; overflow: auto;
 }
+/* A card with many controls scrolls inside itself rather than making the page
+   taller - the mixer is the one that can grow without warning */
+#mixerctls { max-height: 7.5rem; overflow-y: auto; }
 .btdev {
   display: flex; align-items: center; gap: .5rem; padding: .3rem .4rem;
   border: 1px solid var(--line); border-radius: .35rem;
@@ -112,7 +196,7 @@ button.mini { font-size: .8rem; padding: .25rem .5rem; }
 .btdev code { font-size: .75rem; color: var(--dim); }
 
 label.meter { flex: 1 1 140px; }
-progress { width: 100%; height: .7rem; border: 1px solid var(--line); border-radius: .35rem; background: var(--panel2); }
+progress { width: 100%; height: .58rem; border: 1px solid var(--line); border-radius: .35rem; background: var(--panel2); }
 progress::-webkit-progress-bar { background: var(--panel2); }
 progress::-webkit-progress-value { background: linear-gradient(90deg, var(--green), var(--amber)); }
 progress::-moz-progress-bar { background: linear-gradient(90deg, var(--green), var(--amber)); }
@@ -135,7 +219,7 @@ header { flex-wrap: wrap; }
 }
 .maidenhead {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 1.7em;
+  font-size: 1.2em;
   letter-spacing: 0.06em;
   font-weight: 600;
   color: var(--green);
@@ -145,8 +229,8 @@ header { flex-wrap: wrap; }
    station being heard on the right */
 .posrow { display: flex; gap: .9rem; align-items: flex-start; flex-wrap: wrap; }
 .posleft { flex: 1 1 15rem; min-width: 0; }
-.compass { width: 92px; text-align: center; flex: 0 0 auto; }
-.compass svg { width: 92px; height: 92px; display: block; }
+.compass { width: 72px; text-align: center; flex: 0 0 auto; }
+.compass svg { width: 72px; height: 72px; display: block; }
 .cmp-ring { fill: none; stroke: var(--line); stroke-width: 2; }
 .cmp-tick { fill: none; stroke: var(--line); stroke-width: .6; stroke-dasharray: 2 6; }
 .cmp-lbl { fill: var(--dim); font-size: 13px; font-weight: 600; }
@@ -156,7 +240,7 @@ header { flex-wrap: wrap; }
 .cmp-deg { display: block; font-weight: 700; font-size: .95rem; margin-top: -.35rem; }
 .compass .lbl { display: block; font-size: .68rem; color: var(--dim); line-height: 1.25; }
 
-.log { height: 26vh; min-height: 150px; overflow-y: auto; background: #0b0e12; border: 1px solid var(--line);
+.log { height: 20vh; min-height: 130px; overflow-y: auto; background: #0b0e12; border: 1px solid var(--line);
   border-radius: .4rem; padding: .45rem; font: .78rem/1.35 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
 .log div { white-space: pre-wrap; word-break: break-word; }
 .log .k-tx { color: var(--red); }
@@ -168,7 +252,37 @@ header { flex-wrap: wrap; }
 #cmdform { display: flex; gap: .5rem; align-items: center; margin-top: .6rem; }
 #cmdform input { flex: 1; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .82rem; }
 .prompt { color: var(--accent); font-family: ui-monospace, Menlo, Consolas, monospace; }
-.help { height: 15vh; min-height: 96px; overflow-y: auto; margin: 0; color: var(--dim); font-size: .74rem; line-height: 1.3; }
-.note { color: var(--dim); font-size: .78rem; margin: .5rem 0 0; }
+.help { height: 11vh; min-height: 76px; overflow-y: auto; margin: 0; color: var(--dim); font-size: .74rem; line-height: 1.3; }
+.note { color: var(--dim); font-size: .7rem; margin: .22rem 0 0; }
+/* Empty status lines must not take a row: several of them are only used when
+   something is wrong, and on a screen that has to fit, a blank line is a waste */
+p:empty, span.lbl:empty, .note:empty { display: none; }
 .note b { color: var(--fg); }
 .note code { background: var(--panel2); padding: 0 .25rem; border-radius: .2rem; }
+
+/* Analogue level meters: a VU-style dial per direction, in the Audio card. */
+.dial { position: relative; width: 116px; height: 86px; flex: 0 0 auto; }
+.dial svg.dialsvg { display: block; width: 116px; height: 86px; }
+.dface { fill: #0c1015; stroke: var(--line); stroke-width: 1; }
+.darc { fill: none; stroke: #3a4753; stroke-width: 3; stroke-linecap: round; }
+.darc-red { fill: none; stroke: var(--red); stroke-width: 4; stroke-linecap: butt; opacity: .9; }
+.dtick { stroke: #7d8b98; stroke-width: 1.2; }
+.dtick.minor { stroke: #4c5966; stroke-width: .9; }
+.dtick.red { stroke: var(--red); }
+.dnum { fill: #cfdae4; font-size: 8.6px; font-weight: 600; text-anchor: middle; font-family: system-ui, sans-serif; }
+.dnum.red { fill: #ff8080; }
+.dneedleback { stroke: #070a0d; stroke-width: 4.6; stroke-linecap: round; }
+.dneedle { stroke: #f2f7fc; stroke-width: 2.1; stroke-linecap: round;
+           filter: drop-shadow(0 0 1.6px rgba(242,247,252,.5)); }
+.dpeak { stroke: #fff0b0; stroke-width: 2.6; stroke-linecap: round;
+         filter: drop-shadow(0 0 1.4px rgba(255,240,176,.75)); }
+.dhub { fill: #9fb0bf; }
+.dclip { fill: #1b232a; stroke: #6a7784; stroke-width: 1; }
+.dclip.on { fill: var(--red); stroke: #ff9a9a; filter: drop-shadow(0 0 3px rgba(255,92,92,.9)); }
+.dbread { position: absolute; left: 0; right: 0; bottom: 5px; text-align: center;
+          font-size: .66rem; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+/* The caption sits in the middle of the face, where the scale is not: the needle
+   sweeps across it, which does not matter, but the numbers have to stay clear. */
+.dialcap { position: absolute; top: 47px; left: 0; right: 0; text-align: center;
+           font-size: .66rem; color: #9fb0bf; text-transform: uppercase; letter-spacing: .09em;
+           pointer-events: none; }

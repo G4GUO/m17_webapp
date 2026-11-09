@@ -31,6 +31,7 @@
 #include "webserver.h"
 #include "audio.h"
 #include "ui.h"
+#include "m17_sms.h"
 
 #define DEFAULT_WEB_PORT 8080
 #define LOG_LINES        200
@@ -59,6 +60,16 @@ static void *m_srv;
 static int   m_srv_ok;
 
 static char  m_ptt[4]   = "RX";
+static long  m_spk_sent;       // frames handed to web audio clients
+static int   m_spk_clients;    // how many received the last frame
+
+/* Last activity, latched.  State is pushed about once a second and an AX.25
+ * burst is 200 ms, so a live flag would usually be sampled between bursts and
+ * the operator could not tell whether a burst they heard was theirs.  Remember
+ * the direction and when it happened, and let the interface show it for a few
+ * seconds afterwards. */
+static char      m_act[4];
+static long long m_act_ms;
 static char  m_mode[16] = "gate";
 static char  m_src[16]  = "        ";
 static char  m_dst[16]  = "        ";
@@ -127,6 +138,16 @@ static void log_send(const char *kind, const char *fmt, ...) {
     json_escape(line, esc, sizeof(esc));
     snprintf(msg, sizeof(msg), "{\"t\":\"log\",\"kind\":\"%s\",\"line\":\"%s\"}", kind, esc);
     ws_broadcast_text(m_srv, msg);
+}
+
+/* Public wrapper so the protocol code can write to the operator log. */
+void gui_log_event(const char *kind, const char *fmt, ...) {
+    char line[LOG_LEN];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    log_send(kind ? kind : "info", "%s", line);
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +223,20 @@ static void build_state(char *out, int len) {
         case 3:  ptt_now = "CA"; break;
         default: ptt_now = "RX"; break;
     }
-    o = json_add(out, len, o, ",\"mode\":\"%s\",\"ptt\":\"%s\"", mode, ptt_now);
+    {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        long long now = (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+        int in_frame_now = (m_in_frame || db->in_frame) ? 1 : 0;
+        // 'CA' is a keyed carrier: still activity, and the interface should not
+        // claim the station is idle while it is radiating.
+        if (ptt_now[0] == 'T' || ptt_now[0] == 'C') { snprintf(m_act, sizeof m_act, "TX"); m_act_ms = now; }
+        else if (in_frame_now) { snprintf(m_act, sizeof m_act, "RX"); m_act_ms = now; }
+        long long age = now - m_act_ms;
+        if (age > 6000 || !m_act[0]) { m_act[0] = 0; age = -1; }
+        o = json_add(out, len, o, ",\"mode\":\"%s\",\"ptt\":\"%s\",\"act\":\"%s\",\"act_age\":%lld",
+                     mode, ptt_now, m_act, age);
+    }
     {
         // "src" is what THIS station transmits with, and must not change when a
         // station is received: gui_save_src_address() is called by the receive
@@ -368,7 +402,8 @@ static void build_state(char *out, int len) {
                              rsrc, rx.lat, rx.lon, rgrid, (int)rx.alt, rx.speed_kmh, (int)rx.course,
                              gps_rx_age_ms() / 1000.0);
                 // Bearing and distance only mean something with a fix of our own
-                if (gps_fix_fresh(60000)) {
+                // and a position that is still current.
+                if (gps_fix_fresh(60000) && gps_rx_age_ms() < 300000) {
                     o = json_add(out, len, o, ",\"bearing\":%.1f,\"distance_km\":%.2f",
                                  gps_bearing(gps_lat(), gps_lon(), rx.lat, rx.lon),
                                  gps_distance_km(gps_lat(), gps_lon(), rx.lat, rx.lon));
@@ -376,11 +411,12 @@ static void build_state(char *out, int len) {
                 o = json_add(out, len, o, "}");
             }
         }
-        o = json_add(out, len, o, ",\"gps\":{\"valid\":%s,\"fresh\":%s,\"tx\":%s,\"meta\":%s,\"lat\":%.6f,\"lon\":%.6f,"
+        o = json_add(out, len, o, ",\"gps\":{\"valid\":%s,\"fresh\":%s,\"has\":%s,\"tx\":%s,\"meta\":%s,\"lat\":%.6f,\"lon\":%.6f,"
                      "\"grid\":\"%s\",\"alt_m\":%d,\"speed_kmh\":%.1f,\"course\":%d,\"hdop\":%.2f,"
                      "\"sats\":%d,\"age_s\":%.1f,\"status\":\"%s\","
                      "\"csv\":{\"on\":%s,\"path\":\"%s\",\"rows\":%d,\"interval\":%d}}",
                      m_gps.valid ? "true" : "false", fresh ? "true" : "false",
+                     gps_have_position() ? "true" : "false",
                      m17_tx_gnss() ? "true" : "false",
                      m17_tx_gnss_enabled() ? "true" : "false",
                      m_gps.lat, m_gps.lon, grid, (int)m_gps.alt, m_gps.speed_kmh, (int)m_gps.course,
@@ -408,8 +444,17 @@ static void build_state(char *out, int len) {
     // What arrived from the client, separately from what the modulator got: the
     // VU meter cannot tell "the phone is silent" from "the station is not using
     // it", and these two numbers can.
-    o = json_add(out, len, o, ",\"mic_in\":{\"msgs\":%ld,\"peak\":%.3f,\"age_ms\":%ld}",
-                 audio_web_mic_messages(), audio_web_mic_peak(), audio_web_mic_age_ms());
+    // "starved" is the number that explains broken transmit audio: samples the
+    // transmitter had to fill with silence because the client's frames had not
+    // arrived yet.  Anything above zero is an audible hole.
+    o = json_add(out, len, o, ",\"mic_in\":{\"msgs\":%ld,\"peak\":%.3f,\"age_ms\":%ld,"
+                 "\"starved\":%ld,\"buffered\":%d}",
+                 audio_web_mic_messages(), audio_web_mic_peak(), audio_web_mic_age_ms(),
+                 audio_web_mic_starved(), audio_web_mic_available());
+    o = json_add(out, len, o, ",\"spk_out\":{\"open\":%s,\"samples\":%ld,\"frames_sent\":%ld,"
+                 "\"last_clients\":%d,\"route\":\"%s\"}",
+                 audio_web_spk_is_open() ? "true" : "false", audio_web_spk_samples(),
+                 m_spk_sent, m_spk_clients, audio_route_name(audio_get_route(true)));
     o = json_add(out, len, o, ",\"clients\":%d", m_srv ? ws_client_count(m_srv) : 0);
     o = json_add(out, len, o, ",\"phone_clients\":%d", m_srv ? ws_count_role(m_srv, "phone") : 0);
     o = json_add(out, len, o, ",\"refs\":%d", m_refs_count);
@@ -454,7 +499,8 @@ static void send_hello(int id) {
     char hello[256];
     snprintf(hello, sizeof(hello),
              "{\"t\":\"hello\",\"app\":\"m17web\",\"proto\":1,\"stamp\":\"%s\","
-             "\"audio_tag_mic\":1,\"audio_tag_spk\":2,\"rate\":8000}", M17WEB_STAMP);
+             "\"audio_tag_mic\":1,\"audio_tag_spk\":2,\"rate\":8000,\"sms_max\":%d}",
+             M17WEB_STAMP, M17_SMS_MAX_TEXT);
     ws_send_text(m_srv, id, hello);
 
     // Help text
@@ -490,6 +536,44 @@ static void send_hello(int id) {
         ws_send_text(m_srv, id, "{\"t\":\"state\"}");
     } else {
         ws_send_text(m_srv, id, st);
+    }
+
+    // Messages heard before this client arrived, oldest first.
+    gui_sms_replay(id);
+}
+
+/* ------------------------------------------------------------------- SMS */
+
+// Tell every open page about a message the receiver just decoded.
+void gui_sms_received(const SmsMsg *m) {
+    if (m == NULL || m_srv == NULL) return;
+    char esc[M17_SMS_MAX_TEXT * 2 + 8];
+    char msg[M17_SMS_MAX_TEXT * 3 + 128];
+    json_escape(m->text, esc, sizeof(esc));
+    snprintf(msg, sizeof(msg),
+             "{\"t\":\"sms\",\"time\":\"%s\",\"src\":\"%s\",\"text\":\"%s\"}",
+             m->time, m->src, esc);
+    ws_broadcast_text(m_srv, msg);
+}
+
+// Send the kept messages to one client, oldest first, so a page that opens later
+// still shows what has been heard.
+void gui_sms_replay(int id) {
+    if (m_srv == NULL) return;
+    // Only what the card will show: sending the whole ring for a page that keeps
+    // five is wasted traffic and would leave the client trimming anyway.
+    int n = m17_sms_count();
+    if (n > M17_SMS_SHOWN) n = M17_SMS_SHOWN;
+    for (int i = n - 1; i >= 0; i--) {
+        const SmsMsg *m = m17_sms_get(i);
+        if (m == NULL) continue;
+        char esc[M17_SMS_MAX_TEXT * 2 + 8];
+        char msg[M17_SMS_MAX_TEXT * 3 + 128];
+        json_escape(m->text, esc, sizeof(esc));
+        snprintf(msg, sizeof(msg),
+                 "{\"t\":\"sms\",\"time\":\"%s\",\"src\":\"%s\",\"text\":\"%s\"}",
+                 m->time, m->src, esc);
+        ws_send_text(m_srv, id, msg);
     }
 }
 
@@ -531,6 +615,27 @@ static void web_on_close(int id, void *user) {
 // Pull "cmd":"..." out of a JSON object without a full parser
 static int extract_cmd(const char *in, char *out, int len) {
     const char *p = strstr(in, "\"cmd\"");
+    if (!p) return -1;
+    p = strchr(p, ':');
+    if (!p) return -1;
+    p++;
+    while (*p == ' ') p++;
+    if (*p != '"') return -1;
+    p++;
+    int o = 0;
+    while (*p && *p != '"' && o < len - 1) {
+        if (*p == '\\' && p[1]) p++;
+        out[o++] = *p++;
+    }
+    out[o] = 0;
+    return 0;
+}
+
+// Pull "text" out of {"t":"sms","text":"..."}.  The message is far longer than a
+// command line, so it gets its own message type rather than a "sms <text>"
+// command: the command buffer would have cut it at 250 characters.
+static int extract_text(const char *in, char *out, int len) {
+    const char *p = strstr(in, "\"text\"");
     if (!p) return -1;
     p = strchr(p, ':');
     if (!p) return -1;
@@ -652,7 +757,9 @@ static void web_on_msg(int id, int is_binary, const uint8_t *data, int len, void
             // else; the browser route keeps taking it from any client, which is
             // what it has always done.
             const char *role = ws_client_role(m_srv, id);
-            if (audio_get_route(false) == AROUTE_PHONE && strcmp(role, "phone") != 0) return;
+            AudioRoute rin = audio_get_route(false);
+            if (rin == AROUTE_PHONE && strcmp(role, "phone") != 0) return;
+            if (rin == AROUTE_AI && strcmp(role, "ai") != 0) return;
             int n = (len - 1) / 2;
             m_last_mic_ms = now_ms();
             audio_web_mic_push((const int16_t *)(data + 1), n);
@@ -662,6 +769,25 @@ static void web_on_msg(int id, int is_binary, const uint8_t *data, int len, void
     char cmd[256];
     const char *txt = (const char *)data;
     if (len > 0 && txt[0] == '{') {
+        if (strstr(txt, "\"t\":\"sms\"") != NULL) {
+            /* A message from the SMS card: up to M17_SMS_MAX_TEXT characters,
+             * queued for transmission.  The station truncates independently of
+             * the page, so nothing can overrun the packet. */
+            char text[M17_SMS_MAX_TEXT + 1];
+            if (extract_text(txt, text, sizeof(text)) == 0) {
+                int st = m17_sms_queue(text);
+                if (st == 0) {
+                    int n = (int)strlen(text);
+                    if (n > M17_SMS_MAX_TEXT) n = M17_SMS_MAX_TEXT;
+                    char line[96];
+                    snprintf(line, sizeof(line), "SMS queued, %d characters", n);
+                    gui_cmd_resp(line);
+                } else if (st == -2) {
+                    gui_cmd_resp("SMS queue full - wait for the last one to go");
+                }
+            }
+            return;
+        }
         if (extract_cmd(txt, cmd, sizeof(cmd)) == 0) {
             web_note_ptt(cmd, id);
             run_command(cmd);
@@ -694,7 +820,8 @@ void webui_audio_to_browser(const int16_t *s, int len) {
     if (ws_client_count(m_srv) == 0) return;
     // With the phone route the audio belongs to the phone alone, so a page open
     // on the desk can be the control surface without also being the speaker.
-    const char *only = (audio_get_route(true) == AROUTE_PHONE) ? "phone" : NULL;
+    AudioRoute rout = audio_get_route(true);
+    const char *only = (rout == AROUTE_PHONE) ? "phone" : (rout == AROUTE_AI ? "ai" : NULL);
     static uint8_t buf[1 + 2048];
     int maxsamples = (int)(sizeof(buf) - 1) / 2;
     int off = 0;
@@ -703,8 +830,9 @@ void webui_audio_to_browser(const int16_t *s, int len) {
         if (chunk > maxsamples) chunk = maxsamples;
         buf[0] = AUDIO_TAG_SPK;
         memcpy(buf + 1, s + off, (size_t)chunk * 2);
-        if (only) ws_broadcast_bin_role(m_srv, only, buf, 1 + chunk * 2);
-        else      ws_broadcast_bin(m_srv, buf, 1 + chunk * 2);
+        if (only) m_spk_clients = ws_broadcast_bin_role(m_srv, only, buf, 1 + chunk * 2);
+        else      m_spk_clients = ws_broadcast_bin(m_srv, buf, 1 + chunk * 2);
+        m_spk_sent++;
         off += chunk;
     }
 }
@@ -765,14 +893,38 @@ void gui_update_clear(void) {
     if (m_srv) ws_broadcast_text(m_srv, "{\"t\":\"clear\"}");
 }
 
+// An agent client needs to know when someone starts and stops transmitting, so it
+// can open a capture, transcribe, and stay quiet otherwise.  The page ignores
+// message types it does not know, so this is safe to broadcast.
+static void signal_notice(int on, const char *src) {
+    char msg[200];
+    if (!m_srv) return;
+    if (on) {
+        char call[16] = "";
+        if (src && src[0]) {
+            const char *q = src;
+            size_t k = 0;
+            while (*q && *q != ' ' && k < sizeof(call) - 1) call[k++] = *q++;
+            call[k] = 0;
+        }
+        snprintf(msg, sizeof(msg), "{\"t\":\"sig\",\"on\":1,\"src\":\"%s\",\"rate\":8000}", call);
+    } else {
+        snprintf(msg, sizeof(msg), "{\"t\":\"sig\",\"on\":0}");
+    }
+    ws_broadcast_text(m_srv, msg);
+}
+
 void gui_los(void) {
     m_in_frame = false;
     log_send("rx", "loss of signal");
+    signal_notice(0, NULL);
     push_state();
 }
 
 void gui_aos(void) {
+    const M17_Dbase *db = m17_get_db();
     m_in_frame = true;
+    signal_notice(1, (db && db->rx_src_add[0]) ? db->rx_src_add : NULL);
     push_state();
 }
 
@@ -825,8 +977,16 @@ void gui_power(double v) {
 void gui_char(char c) { (void)c; }
 
 void gui_save_src_address(uint48_t add) {
+    // The receive path calls this for every decoded frame - including each chunk
+    // of a packet frame - so logging unconditionally buried the console in
+    // "src <callsign>" lines and hid everything worth reading.  Say it once, when
+    // the station heard changes.
+    static char heard[10];
     decode_addr(add, m_src, sizeof(m_src));
-    log_send("rx", "src %s", m_src);
+    if (strcmp(heard, m_src) != 0) {
+        snprintf(heard, sizeof(heard), "%s", m_src);
+        log_send("rx", "src %s", m_src);
+    }
     push_state();
 }
 

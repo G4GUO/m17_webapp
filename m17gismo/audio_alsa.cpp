@@ -45,6 +45,9 @@ static bool m_have_read;
 static bool m_ctl_valid;    // the card's mixer controls have been read (see below)
 static long m_overruns;     // capture overruns: microphone audio the card discarded
 static long m_starved;      // capture samples lost (ring overflow, or padded silence)
+static long m_spk_xruns;    // playback underruns: gaps in what the speaker gets
+static snd_pcm_uframes_t m_out_buf;      // frames in the playback buffer
+static snd_pcm_uframes_t m_out_period;   // ...and in one period
 
 // Defined with the device selection below, but the setters above need them.
 static void resolve_auto_device(char *out, size_t n);
@@ -75,6 +78,7 @@ const char *audio_alsa_error(void) {
     return m_error;
 }
 long audio_alsa_overruns(void) { return m_overruns; }
+long audio_alsa_spk_xruns(void) { return m_spk_xruns; }
 long audio_alsa_starved(void)  { return m_starved; }
 
 // What is actually open right now, as opposed to the last error string - the
@@ -102,13 +106,41 @@ const char *audio_alsa_capture_device(void) {
 // no reason at all.
 bool audio_alsa_fell_back(void) { return m_fb_mic || m_fb_spk; }
 
-bool audio_alsa_device_changed(void) {
-    char out[128], cap[128];
+bool audio_alsa_device_requested(void) { return m_requested[0] != 0; }
+
+// Is a *Bluetooth* direction selected but not open?  That is the case that has
+// to keep being retried: the SCO link may not exist yet, and the other direction
+// being open must not stop this one from being tried again.  A card direction is
+// left alone - if the card is not there, retrying it forever would achieve
+// nothing.
+bool audio_alsa_side_missing(void) {
+    return audio_alsa_out_missing() || audio_alsa_in_missing();
+}
+
+bool audio_alsa_out_missing(void) {
+    return m_requested[0] && strncmp(m_requested, "bluealsa:", 9) == 0 && m_out == NULL;
+}
+
+bool audio_alsa_in_missing(void) {
+    return m_requested_cap[0] && strncmp(m_requested_cap, "bluealsa:", 9) == 0 && m_in == NULL;
+}
+
+bool audio_alsa_out_device_changed(void) {
+    char out[128];
+    if (m_out == NULL) return false;
     resolve_device(out, sizeof(out), false);
+    return m_used_out[0] && strcmp(m_used_out, out) != 0;
+}
+
+bool audio_alsa_in_device_changed(void) {
+    char cap[128];
+    if (m_in == NULL) return false;
     resolve_device(cap, sizeof(cap), true);
-    if (m_out != NULL && m_used_out[0] && strcmp(m_used_out, out) != 0) return true;
-    if (m_in  != NULL && m_used_in[0]  && strcmp(m_used_in,  cap) != 0) return true;
-    return false;
+    return m_used_in[0] && strcmp(m_used_in, cap) != 0;
+}
+
+bool audio_alsa_device_changed(void) {
+    return audio_alsa_out_device_changed() || audio_alsa_in_device_changed();
 }
 
 void audio_alsa_set_device(const char *dev) {
@@ -363,16 +395,31 @@ static bool open_pcm(snd_pcm_t **pcm, const char *dev, snd_pcm_stream_t dir, con
     // retry wipe a working stream, leaving the device open but unreachable.
     snd_pcm_t *p = NULL;
     int rc = 0;
-    for (int attempt = 0; attempt < 6; attempt++) {
+    // 8 attempts, 350 ms apart: about 2.8 s, enough for a USB card to be
+    // released or a bluealsa A2DP stream to tear down.  Opening a device while
+    // another process is still letting go of it is the common case here - a
+    // restart, a device change, Bluetooth coming back - and is not an error.
+    for (int attempt = 0; attempt < 8; attempt++) {
         rc = snd_pcm_open(&p, dev, dir, 0);
         if (rc >= 0) break;
         if (rc != -EBUSY && rc != -EAGAIN) break;
-        usleep(250000);
+        usleep(350000);
     }
     if (rc < 0) {
         snprintf(m_error, sizeof(m_error), "%s (%s): %s", what, dev, snd_strerror(rc));
         m_error_stream = (dir == SND_PCM_STREAM_CAPTURE) ? 1 : 2;
         return false;
+    }
+    // Adopt the new handle, but never orphan the old one.  If the caller still
+    // has a stream open - two threads applying a device change in the same
+    // cycle, a re-open that overlapped one - overwriting the pointer leaves the
+    // card held by this very process with nothing pointing at it, and every
+    // later open of that device then answers "Device or resource busy" against
+    // itself, for good.  Closing it first keeps the pointers and the hardware in
+    // step, and a leaked open is worth a moment of extra close here.
+    if (*pcm && *pcm != p) {
+        snd_pcm_close(*pcm);
+        *pcm = NULL;
     }
     *pcm = p;
     snd_pcm_hw_params_t *hw;
@@ -399,7 +446,12 @@ static bool open_pcm(snd_pcm_t **pcm, const char *dev, snd_pcm_stream_t dir, con
     // samples in it are gone - that is dropped transmit audio, not just latency.
     snd_pcm_uframes_t period = 160;
     snd_pcm_hw_params_set_period_size_near(*pcm, hw, &period, 0);
-    unsigned int periods = (dir == SND_PCM_STREAM_CAPTURE) ? 16 : 8;
+    // Playback gets 320 ms of buffer (16 x 20 ms) rather than 160: a received
+    // over has to survive the odd late write - a FARGAN block finishing late, a
+    // radio read that took too long, bluealsa's own hiccup - without the speaker
+    // running dry, and a dry stream is what a dropout sounds like.  Capture
+    // stays at 320 ms too, for the same reason at the other end.
+    unsigned int periods = 16;
     snd_pcm_hw_params_set_periods_near(*pcm, hw, &periods, 0);
     if ((rc = snd_pcm_hw_params(*pcm, hw)) < 0) {
         snprintf(m_error, sizeof(m_error), "%s: %s", what, snd_strerror(rc));
@@ -408,6 +460,11 @@ static bool open_pcm(snd_pcm_t **pcm, const char *dev, snd_pcm_stream_t dir, con
         return false;
     }
     snd_pcm_prepare(*pcm);
+    if (dir == SND_PCM_STREAM_PLAYBACK) {
+        snd_pcm_uframes_t got = 0, per = 0;
+        if (snd_pcm_hw_params_get_buffer_size(hw, &got) == 0) m_out_buf = got;
+        if (snd_pcm_hw_params_get_period_size(hw, &per, 0) == 0) m_out_period = per;
+    }
     m_error[0] = 0;
     m_error_stream = 0;
 #ifdef M17WEB_DIAG
@@ -425,6 +482,34 @@ static bool open_pcm(snd_pcm_t **pcm, const char *dev, snd_pcm_stream_t dir, con
 #endif
     m_error[0] = 0;
     return true;
+}
+
+// Fill the playback buffer with silence.  A stream that starts empty underruns
+// on its first write, and one that has underrun stays empty for as long as the
+// receiver's next block takes to arrive - which is heard as the audio breaking
+// up.  Priming gives it a buffer's worth of slack, and is what "add a block of
+// silence at the start" comes to in practice.
+//
+// How much to prime is a real decision.  At open, the whole buffer: the card
+// then runs a buffer behind the decoder and a late write costs latency rather
+// than silence.  After an underrun, only a couple of periods: that happens
+// between overs (nothing is written when nobody is talking), and refilling the
+// whole buffer there would swallow the first fifth of a second of the next
+// transmission.
+static void spk_prime(snd_pcm_uframes_t want) {
+    if (!m_out) return;
+    if (want == 0) want = 2 * 160;
+    int16_t silence[160];
+    memset(silence, 0, sizeof(silence));
+    snd_pcm_uframes_t done = 0;
+    while (done < want) {
+        snd_pcm_uframes_t chunk = want - done;
+        if (chunk > 160) chunk = 160;
+        snd_pcm_sframes_t n = snd_pcm_writei(m_out, silence, chunk);
+        if (n == -EPIPE) { snd_pcm_prepare(m_out); break; }
+        if (n <= 0) break;
+        done += (snd_pcm_uframes_t)n;
+    }
 }
 
 static void close_pcm(snd_pcm_t **pcm) {
@@ -491,16 +576,28 @@ static void *cap_drain_thread(void *arg) {
 }
 
 void audio_alsa_mic_open(void) {
-    char dev[128];
+    char dev[128], want[128];
+    // Opening twice must be a no-op.  The second open used to start a second
+    // capture thread on the same PCM and overwrite the first one's handle, and
+    // two threads reading one bluealsa PCM took the process down (SIGSEGV) the
+    // moment the transmitter keyed.
+    if (m_in != NULL || m_cap_run) return;
     m_fb_mic = false;
     resolve_device(dev, sizeof(dev), true);
+    snprintf(want, sizeof(want), "%s", dev);
     if (!open_pcm(&m_in, dev, SND_PCM_STREAM_CAPTURE, "microphone")) {
         // A device asked for by name - a Bluetooth headset, or a card that has
         // been unplugged - must not leave the station deaf.  Fall back to
-        // whatever card is present, and say so.
+        // whatever card is present, and say so - unless there is no card at all,
+        // in which case a Bluetooth-only station is the intended arrangement and
+        // the retry loop will pick the device up when it appears.
         char alt[128];
         resolve_auto_device(alt, sizeof(alt));
-        if (strcmp(alt, dev) != 0 && open_pcm(&m_in, alt, SND_PCM_STREAM_CAPTURE, "microphone")) {
+        if (pick_usb_card() < 0) {
+            printf("Audio Input: %s is not available and no sound card is attached\n", dev);
+            snprintf(m_error, sizeof(m_error),
+                     "microphone (%s): not available, and no sound card is attached", dev);
+        } else if (strcmp(alt, dev) != 0 && open_pcm(&m_in, alt, SND_PCM_STREAM_CAPTURE, "microphone")) {
             printf("Audio Input: %s is not available, using %s\n", dev, alt);
             snprintf(dev, sizeof(dev), "%s", alt);
             m_fb_mic = true;
@@ -525,20 +622,40 @@ void audio_alsa_mic_open(void) {
             m_in = NULL;
         }
     } else {
-        printf("Audio Input failed: %s\n", m_error);
+        // The speaker may be the direction that brought the HFP link up.  Retry
+        // this side on its own, without closing the stream that works - tearing
+        // both down and reopening is exactly what made the two directions take
+        // turns succeeding.
+        if (m_in == NULL) {
+            printf("Audio Input failed: %s\n", m_error);
+            // Mark it like a fallback so the audio layer keeps the change
+            // pending: bluealsa creates the SCO link when the first of a
+            // headset's two PCMs opens, so the second can fail and succeed a
+            // few seconds later.  Without this the microphone was given up on
+            // for the rest of the run.
+            m_fb_mic = true;
+        }
     }
 }
 
 void audio_alsa_spk_open(void) {
-    char dev[128];
+    char dev[128], want[128];
+    if (m_out != NULL) return;      // already open: re-opening only risks the stream
     m_fb_spk = false;
     resolve_device(dev, sizeof(dev), false);
+    snprintf(want, sizeof(want), "%s", dev);
     if (!open_pcm(&m_out, dev, SND_PCM_STREAM_PLAYBACK, "speaker")) {
         // Same as capture: a Bluetooth speaker that is off, or a card that has
-        // gone, falls back to whatever is there rather than going silent.
+        // gone, falls back to whatever is there rather than going silent.  With
+        // no card attached there is nothing to fall back to, and the retry loop
+        // waits for the Bluetooth device instead of pretending a card exists.
         char alt[128];
         resolve_auto_device(alt, sizeof(alt));
-        if (strcmp(alt, dev) != 0 && open_pcm(&m_out, alt, SND_PCM_STREAM_PLAYBACK, "speaker")) {
+        if (pick_usb_card() < 0) {
+            printf("Audio Output: %s is not available and no sound card is attached\n", dev);
+            snprintf(m_error, sizeof(m_error),
+                     "speaker (%s): not available, and no sound card is attached", dev);
+        } else if (strcmp(alt, dev) != 0 && open_pcm(&m_out, alt, SND_PCM_STREAM_PLAYBACK, "speaker")) {
             printf("Audio Output: %s is not available, using %s\n", dev, alt);
             snprintf(dev, sizeof(dev), "%s", alt);
             m_fb_spk = true;
@@ -548,14 +665,16 @@ void audio_alsa_spk_open(void) {
         snprintf(m_used_out, sizeof(m_used_out), "%s", dev);
         // The card powers up with its own idea of the levels; put them back.
         audio_alsa_mixer_apply();
-        // Prefill with silence: starting playback on an empty buffer guarantees
-        // an immediate underrun (XRUN) on the first write.
-        int16_t silence[160];
-        memset(silence, 0, sizeof(silence));
-        for (int i = 0; i < 4; i++) snd_pcm_writei(m_out, silence, 160);
+        // Fill the whole buffer with silence before starting: an empty buffer
+        // underruns on the first write and then runs a block behind, which is
+        // heard as chopped audio for the first second of every over.
+        spk_prime(m_out_buf ? m_out_buf : 16 * 160);
         snd_pcm_start(m_out);
     } else {
-        printf("Audio Output failed: %s\n", m_error);
+        if (m_out == NULL) {
+            printf("Audio Output failed: %s\n", m_error);
+            m_fb_spk = true;
+        }
     }
 }
 
@@ -641,7 +760,16 @@ void audio_alsa_output(int16_t *s, int len) {
     while (done < len) {
         snd_pcm_sframes_t n = snd_pcm_writei(m_out, s + done, (snd_pcm_uframes_t)(len - done));
         if (n > 0) { done += (int)n; continue; }
-        if (n == -EPIPE) { snd_pcm_prepare(m_out); continue; }  // underrun
+        if (n == -EPIPE || n == -ESTRPIPE) {
+            // Underrun: the speaker ran dry.  Count it - this is the number that
+            // says whether a report of "the audio breaks up" is the card or
+            // something upstream - then refill and carry on.
+            m_spk_xruns++;
+            if (n == -ESTRPIPE) snd_pcm_resume(m_out);
+            snd_pcm_prepare(m_out);
+            spk_prime((m_out_period ? m_out_period : 160) * 2);
+            continue;
+        }
         if (n == -EAGAIN) { continue; }
         break;
     }
