@@ -6,6 +6,11 @@ your network.  This is a fork of [G4GUO/m17_sdr](https://github.com/G4GUO/m17_sd
 with the terminal interface replaced by a browser one; the M17 protocol, DSP and
 networking are upstream's.
 
+This is the one tree for the station: the web interface, the SMS mailbox, the
+FARGAN neural receiver, AX.25 packet over M17, and the standalone KISS bridge.
+The `m17_webapp_fargan` line and the separate `m17-ax25` bridge repository were
+merged into it, so both remain public as history rather than as places to work.
+
     Host (Windows / Linux)                     Raspberry Pi 4 + SDR
     +------------------------+   WebSocket   +---------------------------+
     | browser UI             |<------------->| m17web                    |
@@ -17,7 +22,7 @@ networking are upstream's.
 
 ## What you get
 
-* **AX.25 packet over M17** (branch `feature/ax25-packet`). A KISS host — BPQ,
+* **AX.25 packet over M17.** A KISS host — BPQ,
   or `kissattach` through `kissnetd` — connects to TCP port 8001 and the station
   transmits its frames as M17 packets, handing back whatever the receiver
   decodes. Off unless `data on` is in `config.txt`; see
@@ -42,6 +47,17 @@ networking are upstream's.
   3200 bps bitstream), GPS position in the M17 link setup frame, recording of
   what the receiver decodes, and hardware PTT on the Pi's GPIO header.
 
+## Layout
+
+    m17gismo/     the station itself: M17 modem, DSP, web server, the browser
+                  page in m17gismo/www/, and the AX.25/KISS packet support
+    m17bridge/    the standalone KISS bridge - its own program, built from the
+                  same framing sources as the station
+    docs/         user manual (PDF and the reportlab source), TECHNICAL.md,
+                  ax25.md, sms.md, the M17 notes
+    tools/        the avahi advertisement, the Android protocol check
+    examples/
+
 ## Requirements
 
 * Linux with gcc/g++, make.  Built and tested on Raspberry Pi OS (Pi 4B).
@@ -64,8 +80,8 @@ mkdir build && cd build && cmake -DCMAKE_BUILD_TYPE=Release .. && make -j4
 sudo make install && sudo ldconfig
 cd ../..
 
-git clone https://github.com/G4GUO/m17_webapp_fargan.git
-cd m17_webapp_fargan/m17gismo
+git clone https://github.com/G4GUO/m17_webapp.git
+cd m17_webapp/m17gismo
 make LIME=1 SIM=1 CODEC2_BACKEND=mod
 ```
 

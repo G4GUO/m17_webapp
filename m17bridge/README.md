@@ -49,10 +49,14 @@ reasoning and the spec citations.
 
 ## Layout
 
-    src/kiss.h          KISS framing API (decoder state machine, encoder)
-    src/kiss.c          implementation
-    src/m17_packet.h    LSF, payload chunking and reassembly API
-    src/m17_packet.c    CRC-16, base-40 addresses, 25-byte framing
+The KISS and packet framing sources live in `../m17gismo`, the station this
+bridge feeds, and are compiled from there - there is one copy of that code in
+the tree, not two.
+
+    ../m17gismo/kiss.h        KISS framing API (decoder state machine, encoder)
+    ../m17gismo/kiss.c        implementation - shared with the station
+    ../m17gismo/m17_packet.h  LSF, payload chunking and reassembly API
+    ../m17gismo/m17_packet.c  CRC-16, base-40 addresses, 25-byte framing
     src/m17_bridge.h    queue and channel-access state machine API
     src/m17_bridge.c    duplicate suppression, backoff, voice priority, guard
     tests/test_kiss.c   golden vectors, escaping, overrun, max-size round trip
