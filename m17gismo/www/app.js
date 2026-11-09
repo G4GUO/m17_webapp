@@ -1073,26 +1073,116 @@ const audio = {
   stream: null, queue: [], queued: 0, playing: false, lastMicLevel: 0,
 };
 
+// ---- mic-dsp-begin -------------------------------------------------------
+// Windowed-sinc low pass for decimating to 8 kHz: flat to 3.4 kHz, stop band
+// from the output's Nyquist.  The box average this replaces is not an anti-alias
+// filter - at 48 kHz it passes 5 kHz down to 3 kHz only 6 dB down, so sibilants
+// and room hiss fold into the band the 3200 bps vocoder spends its bits on.
+function decimatorTaps(inRate, taps) {
+  const cutoff = Math.min(3700, 0.44 * inRate);
+  const h = new Float64Array(taps), m = (taps - 1) / 2;
+  let sum = 0;
+  for (let i = 0; i < taps; i++) {
+    const t = i - m;
+    const s = t === 0
+      ? 2 * cutoff / inRate
+      : Math.sin(2 * Math.PI * cutoff * t / inRate) / (Math.PI * t);
+    const w = 0.42 - 0.5 * Math.cos(2 * Math.PI * i / (taps - 1))
+                   + 0.08 * Math.cos(4 * Math.PI * i / (taps - 1));   // Blackman
+    h[i] = s * w; sum += h[i];
+  }
+  for (let i = 0; i < taps; i++) h[i] /= sum;     // unity gain at DC
+  return h;
+}
+
 class Downsampler {
-  // box-filter decimation from ctxRate to 8 kHz
+  // Decimation from the context rate to 8 kHz, emitting numbers already scaled
+  // to int16 (the contract this page had).  The filter runs at the input rate
+  // and a cubic pick takes the fractional output positions, so 44.1 kHz works as
+  // well as 48 kHz without a pattern of 5 and 6 sample averages modulating the
+  // signal.  It also carries the peak limiter: the station's micgain is applied
+  // to samples that are already int16, so a hot webcam would arrive with flat
+  // tops that no trim on the Pi can undo.
   constructor(inRate, outRate) {
     this.step = inRate / outRate;
-    this.acc = 0; this.sum = 0; this.n = 0; this.out = [];
+    this.id = this.step < 1.0001;
+    this.ceiling = 0.94 * 32767;
+    this.g = 1;
+    if (this.id) return;
+    this.h = decimatorTaps(inRate, Math.max(129, Math.min(321, Math.round(inRate / 116) | 1)));
+    this.n = this.h.length;
+    this.x = new Float32Array(this.n);
+    this.w = -1;
+    this.fy = new Float64Array(32);
+    this.i = -1;
+    this.p = 0;
+    this.rebaseAt = 1 << 21;
   }
   process(float32) {
-    for (let i = 0; i < float32.length; i++) {
-      this.sum += float32[i]; this.n++;
-      this.acc += 1;
-      if (this.acc >= this.step) {
-        const v = Math.max(-1, Math.min(1, this.sum / Math.max(1, this.n)));
-        this.out.push(v < 0 ? v * 0x8000 : v * 0x7FFF);
-        this.acc -= this.step; this.sum = 0; this.n = 0;
+    const res = [];
+    if (this.id) {
+      for (let i = 0; i < float32.length; i++) res.push(float32[i] * 32767);
+      return this.limit(res);
+    }
+    const n = this.n, h = this.h, x = this.x, fy = this.fy;
+    for (let s = 0; s < float32.length; s++) {
+      this.w = (this.w + 1) % n;
+      x[this.w] = float32[s];
+      let acc = 0, j = this.w;
+      for (let k = 0; k < n; k++) { acc += h[k] * x[j]; j = j === 0 ? n - 1 : j - 1; }
+      this.i++;
+      fy[this.i & 31] = acc;
+      while (this.p + 2 <= this.i) {
+        const idx = Math.floor(this.p), f = this.p - idx;
+        const a = fy[(idx - 1) & 31], b = fy[idx & 31],
+              c = fy[(idx + 1) & 31], d = fy[(idx + 2) & 31];
+        const c1 = 0.5 * (c - a);
+        const c2 = a - 2.5 * b + 2 * c - 0.5 * d;
+        const c3 = 0.5 * (d - a) + 1.5 * (b - c);
+        res.push((((c3 * f + c2) * f + c1) * f + b) * 32767);   // Catmull-Rom
+        this.p += this.step;
+      }
+      if (this.i > this.rebaseAt) {
+        const d = (this.i - 16) & ~31;
+        this.i -= d; this.p -= d;
       }
     }
-    const a = this.out; this.out = [];
-    return a;
+    return this.limit(res);
+  }
+  limit(s) {
+    if (!s.length) return s;
+    let peak = 0;
+    for (let i = 0; i < s.length; i++) { const a = s[i] < 0 ? -s[i] : s[i]; if (a > peak) peak = a; }
+    if (peak > this.ceiling) {
+      const need = this.ceiling / peak;
+      if (need < this.g) this.g = need;
+    } else if (this.g < 1) {
+      const t = s.length / RATE;
+      this.g = 1 - (1 - this.g) * Math.exp(-t * 1000 / 500);
+    }
+    for (let i = 0; i < s.length; i++) {
+      let v = Math.round(s[i] * this.g);
+      if (v > 32767) v = 32767; else if (v < -32768) v = -32768;
+      s[i] = v;
+    }
+    return s;
   }
 }
+
+// The wire format is one byte of tag followed by s16le, and the station takes the
+// samples to be at data+1 (webui.cpp, and tools/android_proto_check.py builds the
+// same thing).  Framing the microphone in an Int16Array makes the tag a two byte
+// word, so every sample is read one byte early and the Pi decodes the high byte of
+// one sample ORed with the low byte of the next - noise, measured at -21 dB SNR
+// against the source.  Keep this the one place that packs a frame.
+function packMicFrame(int16, off) {
+  const frame = new Uint8Array(1 + 320);
+  frame[0] = TAG_MIC;
+  const dv = new DataView(frame.buffer);
+  for (let i = 0; i < 160; i++) dv.setInt16(1 + i * 2, int16[off + i] | 0, true);
+  return frame;
+}
+// ---- mic-dsp-end ---------------------------------------------------------
 
 class Upsampler {
   // linear interpolation from 8 kHz to the context rate
@@ -1169,10 +1259,8 @@ async function startAudio() {
       if (!txHeld || !ws || ws.readyState !== WebSocket.OPEN) return;
       for (let i = 0; i < s.length; i++) pending.push(s[i]);
       while (pending.length >= 160) {
-        const frame = new Int16Array(161);
-        frame[0] = TAG_MIC;
-        for (let i = 0; i < 160; i++) frame[i + 1] = pending.shift();
-        ws.send(frame.buffer);
+        ws.send(packMicFrame(pending, 0));
+        pending.splice(0, 160);
       }
     };
     src.connect(audio.micNode);
