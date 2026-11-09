@@ -55,8 +55,31 @@ merged into it, so both remain public as history rather than as places to work.
                   same framing sources as the station
     docs/         user manual (PDF and the reportlab source), TECHNICAL.md,
                   ax25.md, sms.md, the M17 notes
-    tools/        the avahi advertisement, the Android protocol check
+    tools/        the avahi advertisement, the Android protocol check, and
+                  station-sync.sh
     examples/
+
+## Keeping a station in step with this repo
+
+The stations are built and run from a **clone**, never from a hand-edited copy -
+that is what caused the divergence this repo was consolidated to end.  On each
+station:
+
+```sh
+git clone https://github.com/G4GUO/m17_webapp.git ~/m17web-src
+~/m17web-src/tools/station-sync.sh           # build, install, restart, verify
+BIN_DEST=~/m17web-build/m17web ~/m17web-src/tools/station-sync.sh   # unit starts a different path
+```
+
+`station-sync.sh` fetches, refuses to run over local edits (`--force` to discard
+them), resets to `origin/master`, builds with `SIM=1 CODEC2_BACKEND=mod`,
+installs the binary where the systemd unit starts it and `www/` where the service
+serves it, restarts, then proves the served page is byte-identical to the repo and
+the panel answers on 8080.  `--check` does the verification alone.
+
+Only two things on a station are allowed to be local: `www/`'s live copies (which
+the script overwrites from the repo, deliberately) and `M17Hosts.txt` in the
+service directory.
 
 ## Requirements
 
