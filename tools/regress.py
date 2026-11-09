@@ -114,13 +114,15 @@ def check_assets(url_base):
     rc, html, err = fetch(url_base + "/")
     if rc != 200:
         return record(FAIL, "page/assets", f"GET / -> {rc} {err}")
-    refs = re.findall(r'"([a-z0-9_.-]+)\?v=(\d+)"', html, re.I)
+    # "style.css?v=14" or "/style.css?v=14" - the server may serve either form
+    refs = re.findall(r'"(/?[a-z0-9_.\-/]+)\?v=(\d+)"', html, re.I)
     if not refs:
         return record(FAIL, "page/assets", "no ?v=N asset references in index.html")
     bad, seen = [], []
     for name, ver in refs:
-        seen.append(f"{name}?v={ver}")
-        code, _, _ = fetch(f"{url_base}/{name}?v={ver}")
+        rel = name.lstrip("/")
+        seen.append(f"{rel}?v={ver}")
+        code, _, _ = fetch(f"{url_base}/{rel}?v={ver}")
         if code != 200:
             bad.append(f"{name}?v={ver} -> {code}")
     detail = ", ".join(seen)
@@ -187,11 +189,16 @@ class Panel:
     def __init__(self, host, port, timeout=5.0, wstest_dir=None):
         # wstest.py ships with the station code in m17gismo/tools; fall back to
         # this directory so a copied-out script still works.
+        found = None
         for d in [wstest_dir, os.path.dirname(os.path.abspath(__file__)),
                   os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "m17gismo", "tools")]:
             if d and os.path.isfile(os.path.join(d, "wstest.py")):
+                found = d
                 sys.path.insert(0, d)
                 break
+        if not found:
+            raise RuntimeError(f"wstest.py not found (looked in {wstest_dir}); "
+                               "point --repo at the clone")
         from wstest import WSClient
         self.ws = WSClient(host, port, timeout=timeout)
         self.states, self.texts = [], []
@@ -280,13 +287,18 @@ def check_panel(host, port, allow_sim, expect_radio, wstest_dir=None):
     else:
         ok &= record(FAIL, "command/help", "no reply to 'h'")
 
+    # Three different states, and they mean different things to the operator:
+    # no receiver at all, a receiver that is open but silent, and a fix.
     gps = after.get("gps") or {}
-    if gps.get("has") and not gps.get("valid"):
-        ok &= record(WARN, "gps", f"receiver present, no fix ({gps.get('sats')} sats, {gps.get('age_s')} s old)")
+    status = (gps.get("status") or "")
+    if gps.get("has") and gps.get("valid"):
+        ok &= record(OK, "gps", f"fix {gps.get('grid', '--')}, {gps.get('sats')} sats, {gps.get('age_s')} s old")
     elif gps.get("has"):
-        ok &= record(OK, "gps", f"fix {gps.get('grid', '--')} {gps.get('sats')} sats")
+        ok &= record(WARN, "gps", f"receiver open, no fix yet ({gps.get('sats')} sats) - META would be empty")
+    elif "no GPS receiver" in status:
+        ok &= record(WARN, "gps", "no GPS receiver attached (META would be empty)")
     else:
-        ok &= record(WARN, "gps", "no GPS receiver seen (META will be empty)")
+        ok &= record(WARN, "gps", f"receiver open but silent: {status[:70]}")
 
     audio = after.get("audio")
     route_ok = (after.get("spk_out") or {}).get("open") or audio == "browser"
@@ -309,6 +321,8 @@ def check_panel(host, port, allow_sim, expect_radio, wstest_dir=None):
 # The software path with no radio: sim instance plus a reflector that dies
 # ---------------------------------------------------------------------------
 def check_deep(repo, unit, wstest_dir=None):
+    """The software path with no radio at all: a sim instance on a spare port and
+    a reflector that answers, pings, then vanishes without saying goodbye."""
     exe = None
     rc, execstart, _ = run(["systemctl", "show", "-p", "ExecStart", unit])
     m = re.search(r"path=(\S+)", execstart)
@@ -316,38 +330,47 @@ def check_deep(repo, unit, wstest_dir=None):
         exe = m.group(1)
     if not exe:
         return record(SKIP, "deep/sim", "no binary to run")
-    tmp = tempfile.mkdtemp(prefix="m17regress-")
-    port = free_port(18080)
     fake = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_reflector.py")
     if not os.path.isfile(fake):
-        record(SKIP, "deep/fake-reflector", f"{fake} missing")
-        shutil.rmtree(tmp, ignore_errors=True)
-        return False
-    ref_port = free_port(17100)
+        return record(SKIP, "deep/fake-reflector", f"{fake} missing")
+
+    tmp = tempfile.mkdtemp(prefix="m17regress-")
+    port, ref_port = free_port(18080), free_port(17100)
+    alive = 12
     with open(os.path.join(tmp, "M17Hosts.txt"), "w") as f:
         f.write(f"M17-TESTREF 127.0.0.1 {ref_port}\n")
     shutil.copytree(os.path.join(repo, "m17gismo", "www"), os.path.join(tmp, "www"))
-    log = open(os.path.join(tmp, "m17web.log"), "w")
+    web_log = open(os.path.join(tmp, "m17web.log"), "w")
+    ref_log = open(os.path.join(tmp, "reflector.log"), "w")
     proc = subprocess.Popen([exe, "-r", "sim", "-w", str(port), "-a", "none"],
-                            cwd=tmp, stdout=log, stderr=subprocess.STDOUT)
+                            cwd=tmp, stdout=web_log, stderr=subprocess.STDOUT)
+    ref = None
     ok = True
     try:
         if not wait_http(f"http://127.0.0.1:{port}", 20):
-            ok &= record(FAIL, "deep/sim-start", f"no HTTP on {port} within 20 s")
-            return ok
+            return record(FAIL, "deep/sim-start", f"no HTTP on {port} within 20 s") and ok
         p = Panel("127.0.0.1", port, timeout=5.0, wstest_dir=wstest_dir).pump(2.0)
         ok &= record(OK if p.state.get("radio") == "sim" else FAIL, "deep/sim-start",
                      f"radio '{p.state.get('radio')}' on port {port}")
-        # A reflector that answers, then goes silent without saying goodbye.
-        ref = subprocess.Popen([sys.executable, fake, str(ref_port), "12"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(0.5)
-        p.send("conn TESTREF")
+
+        ref = subprocess.Popen([sys.executable, fake, str(ref_port), str(alive)],
+                               stdout=ref_log, stderr=subprocess.STDOUT)
+        time.sleep(0.7)
+        # Three tokens: "conn <name> <module>" - two tokens is silently ignored.
+        p.send("conn TESTREF C")
         p.pump(6.0)
-        connected = (p.state.get("ref") or {}).get("connected")
-        ok &= record(OK if connected else FAIL, "deep/reflector-connect",
-                     f"ref.connected={connected} name={(p.state.get('ref') or {}).get('name')!r}")
-        ref.wait(timeout=30)
+        resp = [x.get("line", "") for x in p.texts if x.get("t") == "resp"]
+        st_ref = p.state.get("ref") or {}
+        ok &= record(OK if st_ref.get("connected") else FAIL, "deep/reflector-connect",
+                     f"ref.connected={st_ref.get('connected')} name={st_ref.get('name')!r}"
+                     + (f" resp={resp[-1]!r}" if resp else ""))
+        try:
+            ref.wait(timeout=alive + 20)
+        except subprocess.TimeoutExpired:
+            ref.kill()
+            ok &= record(FAIL, "deep/reflector-vanish",
+                         f"the fake reflector never received a CONN (see {ref_log.name})")
+            return ok
         dropped_at, seen = None, time.time()
         while time.time() - seen < 45:
             p.pump(2.0)
@@ -357,16 +380,32 @@ def check_deep(repo, unit, wstest_dir=None):
         ok &= record(OK if dropped_at is not None else FAIL, "deep/reflector-timeout",
                      f"link marked down {dropped_at:.0f}s after the reflector vanished"
                      if dropped_at is not None else "still claiming a link 45 s after it died")
+        p.pump(2.5)      # the log line can arrive just after the state change
+        # The station says this on the command-reply channel, not the event log.
+        said = [x.get("line", "") for x in p.texts if x.get("t") in ("log", "resp")]
+        why = [l for l in said if "silent" in l.lower() or "link down" in l.lower()
+               or "stopped answering" in l.lower()]
+        if why:
+            ok &= record(OK, "deep/timeout-reason", f"station said {why[-1][:58]!r}")
+        else:
+            ok &= record(WARN, "deep/timeout-reason",
+                         f"nothing was said about the drop ({len(said)} log/resp frames seen)")
         p.send("disc")
         p.close()
     finally:
+        if ref and ref.poll() is None:
+            ref.kill()
         proc.terminate()
         try:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
-        log.close()
-        shutil.rmtree(tmp, ignore_errors=True)
+        web_log.close()
+        ref_log.close()
+        if not ok:
+            print(f"        logs kept in {tmp}")
+        else:
+            shutil.rmtree(tmp, ignore_errors=True)
     return ok
 
 

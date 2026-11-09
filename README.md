@@ -81,6 +81,41 @@ Only two things on a station are allowed to be local: `www/`'s live copies (whic
 the script overwrites from the repo, deliberately) and `M17Hosts.txt` in the
 service directory.
 
+## Checking a station still works
+
+After any change, the question is not "did the sync finish" but "is this radio
+still a working station".  `tools/regress.py` answers that.  It runs on the
+station, touches nothing, transmits nothing, and exits non-zero if any check
+fails:
+
+```sh
+python3 ~/m17web-src/tools/regress.py            # ~15 s: deployment, service, panel, radio
+python3 ~/m17web-src/tools/regress.py --deep     # + the sim/fake-reflector tests, ~90 s
+python3 ~/m17web-src/tools/regress.py --json /tmp/regress.json
+tools/regress-both.sh --deep                     # both bench stations, summarised
+```
+
+It checks, in order:
+
+| check | what a failure means |
+|---|---|
+| `repo` | the clone is dirty or behind `origin/master` - the station is not the repo |
+| `service` | the unit is not running |
+| `binary` | the running binary is older than the sources - it was built from older code |
+| `www/served-matches` | a served asset differs from the clone (a half-finished deploy) |
+| `page/markup` | an anchor the UI needs has been renamed or removed |
+| `page/assets` | `index.html` asks for an asset version that does not serve |
+| `panel/websocket` | the state channel is dead |
+| `radio/route`, `radio/frequency` | the SDR is not the expected one, or has no tuning |
+| `radio/receiver` | zero signal - no samples are arriving from the radio |
+| `radio/counters` | `gerr`/drops/overruns moved while idle |
+| `command/help` | the command path is broken |
+| `gpio`, `audio`, `gps` | reported, warned about, but not fatal |
+| `deep/*` | the software path is broken: no sim instance, no reflector link, or a link that never times out |
+
+Warnings do not fail the run.  A station can pass every check with a dead GPS,
+which is exactly the sort of thing you want told about but not woken up for.
+
 ## Requirements
 
 * Linux with gcc/g++, make.  Built and tested on Raspberry Pi OS (Pi 4B).
