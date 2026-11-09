@@ -523,6 +523,7 @@ int  m17_net_open(void);
 void m17_net_close(void);
 bool m17_net_connected(void);
 void m17_net_ref_address(char *name);
+void m17_net_ref_name(char *name);   // plain name, no padding, no module
 char m17_net_ref_module(void);
 
 // Name = Reflector name

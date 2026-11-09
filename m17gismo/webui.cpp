@@ -198,8 +198,10 @@ static void build_state(char *out, int len) {
     for (int i = 0; mode[i]; i++)
         if (mode[i] == '\n' || mode[i] == '\r' || mode[i] == '\t') mode[i] = ' ';
 
+    // The plain name: the panel prints "name-module" itself, and the padded
+    // console form made that read "M17-M17 C-C".
     char ref[16] = "";
-    m17_net_ref_address(ref);
+    m17_net_ref_name(ref);
 
     // The reflector module is only set once connected; %c of a NUL byte would
     // make the JSON unparseable.
@@ -753,13 +755,17 @@ static void web_on_msg(int id, int is_binary, const uint8_t *data, int len, void
     (void)user;
     if (is_binary) {
         if (len > 1 && data[0] == AUDIO_TAG_MIC) {
-            // The phone route takes the microphone from the phone and nowhere
-            // else; the browser route keeps taking it from any client, which is
-            // what it has always done.
+            // Every route names its client, in this direction too: the browser
+            // route's client is the plain page, role "".  Taking the microphone
+            // from any role let an assistant, or a phone that was connected for
+            // some other reason, put audio on air with "ai" and "phone"
+            // unselected - the mirror of the speaker leak.
             const char *role = ws_client_role(m_srv, id);
             AudioRoute rin = audio_get_route(false);
-            if (rin == AROUTE_PHONE && strcmp(role, "phone") != 0) return;
-            if (rin == AROUTE_AI && strcmp(role, "ai") != 0) return;
+            const char *want = (rin == AROUTE_AI)    ? "ai"
+                             : (rin == AROUTE_PHONE) ? "phone"
+                                                     : "";
+            if (strcmp(role, want) != 0) return;
             int n = (len - 1) / 2;
             m_last_mic_ms = now_ms();
             audio_web_mic_push((const int16_t *)(data + 1), n);
@@ -820,8 +826,15 @@ void webui_audio_to_browser(const int16_t *s, int len) {
     if (ws_client_count(m_srv) == 0) return;
     // With the phone route the audio belongs to the phone alone, so a page open
     // on the desk can be the control surface without also being the speaker.
+    // The assistant is the same: a client that asked for /ws?client=ai is only
+    // fed the receiver when the route selects it.  Passing NULL here meant
+    // "every client", so an assistant connected for some other reason heard
+    // every over with "ai" unselected, which is how it was reported.  A plain
+    // page has role "" and is the browser route's client.
     AudioRoute rout = audio_get_route(true);
-    const char *only = (rout == AROUTE_PHONE) ? "phone" : (rout == AROUTE_AI ? "ai" : NULL);
+    const char *only = (rout == AROUTE_PHONE) ? "phone"
+                     : (rout == AROUTE_AI)    ? "ai"
+                                              : "";
     static uint8_t buf[1 + 2048];
     int maxsamples = (int)(sizeof(buf) - 1) / 2;
     int off = 0;
