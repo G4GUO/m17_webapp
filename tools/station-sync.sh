@@ -129,8 +129,16 @@ if [ -n "$BIN_DEST" ]; then
 fi
 
 if command -v curl >/dev/null 2>&1; then
-    code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/ || true)
-    say "== http://127.0.0.1:8080/ -> $code"
+    # The unit takes a few seconds to open the radio and the web port, so give it
+    # time instead of declaring failure on the first connection refused.
+    i=0
+    code=000
+    while [ "$i" -lt 45 ]; do
+        code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/ || true)
+        [ "$code" = "200" ] && break
+        i=$((i + 1)); sleep 1
+    done
+    say "== http://127.0.0.1:8080/ -> $code (after ${i}s)"
     [ "$code" = "200" ] || die "the panel did not come back after the restart"
 fi
 
