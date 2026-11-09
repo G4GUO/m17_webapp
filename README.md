@@ -2,7 +2,7 @@
 
 Receive and transmit **M17** digital voice with a PlutoSDR, a LimeSDR, or no
 radio at all, and control the whole station from a web browser on any machine on
-your network.  This is a fork of [G4GUO/m17_sdr](https://github.com/G4GUO/m17_sdr)
+your network.  This is a fork of [G4GUO/m17_core](https://github.com/G4GUO/m17_core)
 with the terminal interface replaced by a browser one; the M17 protocol, DSP and
 networking are upstream's.
 
@@ -177,7 +177,7 @@ that file with the settings you change from the page.
 
 0BSD.
 
-* M17 implementation: **G4GUO** ([m17_sdr](https://github.com/G4GUO/m17_sdr)).
+* M17 implementation: **G4GUO** ([m17_core](https://github.com/G4GUO/m17_core)).
 * FARGAN neural decoder: **Wojciech Kaczmarski SP5WWP**, M17 Project
   ([Codec2-mod-neural](https://github.com/M17-Project/Codec2-mod-neural)).
 * Codec2: **David Rowe VK5DGR** and contributors.

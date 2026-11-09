@@ -769,7 +769,7 @@ def build(path: str) -> None:
         "sinusoidal decoder. Codec2 itself is David Rowe VK5DGR's.")
 
     m.h1("13. Where this came from, and further reading")
-    m.p("m17web is a modification of <b>G4GUO/m17_sdr</b>, with the original terminal interface "
+    m.p("m17web is a modification of <b>G4GUO/m17_core</b>, with the original terminal interface "
         "replaced by the web page described here. The M17 protocol it speaks is an open standard "
         "from the M17 Project; the voice coding is Codec2 by David Rowe and the M17 Project's "
         "Codec2-mod build. It uses the open-source libiio, ALSA, Codec2 and libgpiod libraries.")
