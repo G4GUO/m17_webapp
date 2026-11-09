@@ -1069,7 +1069,7 @@ function dialLevels(mic, spk) {
 // Audio (WebAudio <-> 8 kHz PCM over the WebSocket)
 // ---------------------------------------------------------------------------
 const audio = {
-  ctx: null, micCtx: null, outGain: null, micNode: null, spkNode: null,
+  ctx: null, outGain: null, micNode: null, spkNode: null,
   stream: null, queue: [], queued: 0, playing: false, lastMicLevel: 0,
 };
 
@@ -1225,11 +1225,7 @@ function setSpkMute() {
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 async function startAudio() {
-  if (audioReady) {
-    try { await audio.ctx.resume(); } catch (e) {}
-    if (audio.micCtx) { try { await audio.micCtx.resume(); } catch (e) {} }
-    return true;
-  }
+  if (audioReady) { try { await audio.ctx.resume(); } catch (e) {} return true; }
   try {
     audio.ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     // resume() never settles on a machine with no output device, so it must not
@@ -1237,26 +1233,13 @@ async function startAudio() {
     // later gesture resumes the context.
     await Promise.race([audio.ctx.resume().catch(() => {}), sleep(1500)]);
     const rate = audio.ctx.sampleRate;
+    down = new Downsampler(rate, RATE);
     up = new Upsampler(RATE, rate);
-
-    // Capture goes on its own 8 kHz context where the browser will make one: its
-    // resampler is a proper anti-alias filter, so nothing above 4 kHz can fold
-    // into the voice band.  Where the rate request is ignored (some browsers pin
-    // the hardware rate) Downsampler does the filtering instead.
-    let capCtx = audio.ctx, capRate = rate;
-    try {
-      const c = new (window.AudioContext || window.webkitAudioContext)(
-        { sampleRate: RATE, latencyHint: 'interactive' });
-      if (c.sampleRate === RATE) { audio.micCtx = capCtx = c; capRate = RATE; }
-      else if (c.close) c.close();
-    } catch (e) { /* keep the playback context and filter in JS */ }
-    if (audio.micCtx) await Promise.race([audio.micCtx.resume().catch(() => {}), sleep(1500)]);
-    down = new Downsampler(capRate, RATE);
 
     audio.stream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
     });
-    const src = capCtx.createMediaStreamSource(audio.stream);
+    const src = audio.ctx.createMediaStreamSource(audio.stream);
     audio.outGain = audio.ctx.createGain();
     // Unity here by design: the received audio arrives already scaled by the
     // station's speaker volume, which is the control the meters reflect.
@@ -1264,7 +1247,7 @@ async function startAudio() {
     audio.outGain.connect(audio.ctx.destination);
 
     // microphone -> 8 kHz -> websocket
-    audio.micNode = capCtx.createScriptProcessor(capRate === RATE ? 256 : 1024, 1, 1);
+    audio.micNode = audio.ctx.createScriptProcessor(1024, 1, 1);
     const pending = [];
     audio.micNode.onaudioprocess = (ev) => {
       const s = down.process(ev.inputBuffer.getChannelData(0));
@@ -1281,7 +1264,7 @@ async function startAudio() {
       }
     };
     src.connect(audio.micNode);
-    audio.micNode.connect(capCtx.destination); // sink so the node runs; buffer stays silent
+    audio.micNode.connect(audio.ctx.destination); // sink so the node runs; buffer stays silent
 
     // 8 kHz -> speaker
     audio.spkNode = audio.ctx.createScriptProcessor(2048, 0, 1);
