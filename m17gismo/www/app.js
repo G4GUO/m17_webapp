@@ -15,6 +15,7 @@ let ws = null;
 let reconnectDelay = 500;
 let st = {};                       // last state message
 let audioReady = false;
+let audioOff = false;               // stopped on purpose, as opposed to never started
 let txHeld = false;
 
 // ---------------------------------------------------------------------------
@@ -259,7 +260,10 @@ function renderAudio(s) {
       }
     }
     if (spk === 'browser' || mic === 'browser') {
-      if (!audioReady) { txt += ' - browser audio not enabled yet'; col = 'var(--amber)'; }
+      if (!audioReady) {
+        txt += audioOff ? ' - browser audio is off' : ' - browser audio not enabled yet';
+        col = 'var(--amber)';
+      }
     }
   }
   if (s.audio_pending) txt += ' (applying\u2026)';
@@ -273,8 +277,7 @@ function renderAudio(s) {
   el.style.color = col;
 
   if (!cfgOpen) setRoutes(spk, mic);
-  const en = $('audioenable');
-  if (en) en.disabled = audioReady;
+  paintAudioButton();
 }
 
 // The sound card's own hardware controls.  The names come from the card, so the
@@ -917,7 +920,10 @@ function wire() {
     e.target.value = v - (v % 2);          // whole sub frames only
     cmd('lead ' + e.target.value);
   };
-  $('audioenable').onclick = () => startAudio();
+  // One button, two directions: it is the only way to stop the browser listening,
+  // and pressing it again picks the microphone back up.
+  $('audioenable').onclick = () => (audioReady ? stopAudio() : startAudio());
+  paintAudioButton();
 
   cmd('refs');
 }
@@ -1276,7 +1282,8 @@ async function startAudio() {
     audio.spkNode.connect(audio.outGain);
 
     audioReady = true;
-    $('audioenable').disabled = true;
+    audioOff = false;
+    paintAudioButton();
     $('audioerr').textContent = '';
     // Name the device the browser actually opened: "far too loud at any trim"
     // is usually the laptop's own array rather than the one that was expected.
@@ -1295,6 +1302,58 @@ async function startAudio() {
 
 let micFlush = [];
 function flushMic() { micFlush = []; }
+
+// ---------------------------------------------------------------------------
+// Turning browser audio off again.  The page keeps its socket, its panel and its
+// state; only the local audio goes away, so the button can bring it back without
+// a reload.  The capture track is stopped first and explicitly, which is what
+// puts the browser's microphone indicator out - dropping the node alone leaves
+// it lit and looks like the page is still listening.
+function stopAudio() {
+  if (!audioReady && !audio.ctx) return false;
+  pttReleaseNow();                       // never leave the station keyed by a page that stops listening
+  try { if (audio.micNode) { audio.micNode.onaudioprocess = null; audio.micNode.disconnect(); } } catch (e) { /* already gone */ }
+  try { if (audio.spkNode) { audio.spkNode.onaudioprocess = null; audio.spkNode.disconnect(); } } catch (e) { /* already gone */ }
+  try { if (audio.outGain) audio.outGain.disconnect(); } catch (e) { /* already gone */ }
+  try { if (audio.stream) audio.stream.getTracks().forEach((t) => t.stop()); } catch (e) { /* no stream */ }
+  const ctx = audio.ctx;
+  audio.ctx = null; audio.stream = null; audio.outGain = null;
+  audio.micNode = null; audio.spkNode = null;
+  // Received frames are dropped while `up` is null, so nothing queues in a
+  // buffer with no one draining it; both are rebuilt by the next start.
+  up = null; down = null;
+  audioReady = false;
+  audioOff = true;
+  if (ctx) { try { ctx.close(); } catch (e) { /* already closed */ } }
+  paintAudioButton();
+  addLog('info', 'browser audio off: microphone released, received audio no longer played');
+  return true;
+}
+
+// The one place that decides what the audio button says and looks like, so the
+// state stream and the two paths above cannot disagree with each other.
+function paintAudioButton() {
+  const b = $('audioenable');
+  if (!b) return;
+  b.disabled = false;                    // needed while running: it is the off switch
+  b.textContent = audioReady ? 'disable browser audio' : 'enable browser audio';
+  b.classList.toggle('on', audioReady);
+  b.title = audioReady
+    ? 'Release the microphone and stop playing the received audio'
+    : 'Ask the browser for the microphone and play the received audio';
+}
+
+// Release the transmitter from outside the PTT handlers: the same things the
+// pointerup path does, gathered here so a later caller cannot forget one of them.
+function pttReleaseNow() {
+  if (!txHeld) return;
+  txHeld = false;
+  const btn = $('pttbtn');
+  if (btn) btn.classList.remove('live');
+  cmd('rx');
+  flushMic();
+  setSpkMute();
+}
 
 function handleBinary(u8) {
   if (u8.length < 3 || u8[0] !== TAG_SPK) return;

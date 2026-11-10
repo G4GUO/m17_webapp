@@ -115,6 +115,9 @@ button { cursor: pointer; }
 button:hover { border-color: var(--accent); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 button.mini { font-size: .76rem; padding: .18rem .45rem; }
+/* Browser audio running: this button is now the off switch, so it has to read as
+   a state rather than as something still waiting to be pressed. */
+button.mini.on { border-color: var(--green); color: var(--green); }
 
 /* Touch: iOS Safari starts a text selection - with the magnifier loupe and the
    Copy/Look Up menu - when a press on a button lasts more than about half a
