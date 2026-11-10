@@ -99,6 +99,18 @@ static void bt_sync_routes(void){
 	save_line_to_config("mic", line);
 }
 
+// A frequency in the form an operator reads it: "437.450000 MHz (437450000 Hz)".
+// Integer arithmetic throughout, so nothing rounds a channel plan.
+static void mmi_report_freq(const char *what, uint64_t hz) {
+	char line[80];
+	snprintf(line, sizeof line, "%s frequency: %llu.%06llu MHz (%llu Hz)",
+	         what,
+	         (unsigned long long)(hz / 1000000ULL),
+	         (unsigned long long)(hz % 1000000ULL),
+	         (unsigned long long)hz);
+	gui_cmd_resp(line);
+}
+
 void mmi_parse(char *cmd){
 	int nt = 0;
 	bool valid = false;
@@ -337,12 +349,16 @@ void mmi_parse(char *cmd){
 		}
 	}
 
-	// Transmitter frequency
+	// Transmitter frequency.  On its own it reports: an operator who wants to
+	// know what the station is on should not have to type a number to find out.
 	if(strncmp(token[0],"tf",2)==0){
 		if(	nt == 2 ){
 			uint64_t freq = atoll(token[1]);
 			radio_set_tx_frequency(freq);
 			m17_db_set_tx_freq(freq);
+			valid = true;
+		}else if(nt == 1){
+			mmi_report_freq("tx", m17_get_db()->tx_freq);
 			valid = true;
 		}
 	}
@@ -353,6 +369,9 @@ void mmi_parse(char *cmd){
 			uint64_t freq = atoll(token[1]);
 			radio_set_rx_frequency(freq);
 			m17_db_set_rx_freq(freq);
+			valid = true;
+		}else if(nt == 1){
+			mmi_report_freq("rx", m17_get_db()->rx_freq);
 			valid = true;
 		}
 	}
