@@ -733,6 +733,10 @@ function wire() {
   const down = (e) => {
     e.preventDefault();
     if (btn.disabled) return;          // no microphone to feed a carrier; the station would refuse it too
+    // A finger that slides off the key is still holding it.  Capture the pointer so
+    // every move and the release come back to this button however far it drifts,
+    // which is what stopped a long over as soon as the thumb touched the edge.
+    try { btn.setPointerCapture(e.pointerId); } catch (err) { /* older browser */ }
     // A suspended context fires no callbacks, so the station hears nothing and its
     // watchdog drops the carrier after a few seconds - "transmit comes on, then goes
     // off".  iOS suspends for a screen lock, a call, or an audio route change, and a
@@ -747,10 +751,13 @@ function wire() {
   };
   const up = (e) => {
     if (txHeld) { txHeld = false; btn.classList.remove('live'); cmd('rx'); flushMic(); setSpkMute(); }
+    try { if (btn.hasPointerCapture && btn.hasPointerCapture(e.pointerId)) btn.releasePointerCapture(e.pointerId); } catch (err) { /* already gone */ }
   };
   btn.addEventListener('pointerdown', down);
   btn.addEventListener('pointerup', up);
-  btn.addEventListener('pointerleave', up);
+  // Only a real release unkeys.  With the capture above this never fires while the
+  // finger is down; the buttons check covers a browser that ignores setPointerCapture.
+  btn.addEventListener('pointerleave', (e) => { if (!e.buttons) up(e); });
   btn.addEventListener('pointercancel', up);
   window.addEventListener('keydown', (e) => {
     if (e.code === 'Space' && !e.repeat && !isTyping(e.target)) down(e);
