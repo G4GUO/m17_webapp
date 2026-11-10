@@ -516,6 +516,11 @@ function renderMixer(s) {
 // Will the position take the META field at the next transmission?  If it will, a
 // text that is set is only waiting its turn, and the badges have to say so rather
 // than implying the text is what goes out.
+// What was sent to the station about the META text, and when: kept until the
+// station echoes it back, so a frame in flight cannot undo the typing.
+let mtextPending = null;
+let mtextPendingAt = 0;
+
 function posTakesField(g) {
   return !!(g && g.meta !== false && g.valid && g.fresh !== false);
 }
@@ -523,9 +528,26 @@ function posTakesField(g) {
 function renderMetaText(s) {
   const m = s.mtext || {};
   const g = s.gps || {};
-  const own = m.send || '';
   const box = $('mtext');
-  if (box && document.activeElement !== box) box.value = own;
+  // A state with no mtext at all is an older station: never let the missing
+  // field empty the box the operator is typing in.
+  if (!('send' in m)) {
+    if (box && document.activeElement !== box && mtextPending === null) box.value = '';
+    return;
+  }
+  const own = m.send || '';
+  // Do not write into the box until the station has echoed what was sent: the
+  // frames keep arriving while the command is in flight, and a stale empty one
+  // used to wipe the text the moment the button took the focus.
+  if (mtextPending !== null) {
+    if (own === mtextPending) {
+      mtextPending = null;
+    } else if (Date.now() - mtextPendingAt > 4000) {
+      mtextPending = null;
+      if (typeof addLog === 'function') addLog('resp', 'the station did not take that META text');
+    }
+  }
+  if (box && mtextPending === null && document.activeElement !== box) box.value = own;
   const flag = $('mtextflag');
   if (flag) {
     // The text is the fallback, so say which one is actually going out.
@@ -976,7 +998,10 @@ function wire() {
     const b = $('mtext');
     if (!b) return;
     const t = b.value.trim();
+    mtextPending = t;
+    mtextPendingAt = Date.now();
     cmd(t ? 'meta text ' + t : 'meta text off');
+    b.focus();          // keep the box, so no frame and no blur can empty it
   };
   if ($('mtextset')) $('mtextset').onclick = mtsend;
   if ($('mtextoff')) $('mtextoff').onclick = () => cmd('meta text off');
