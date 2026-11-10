@@ -532,7 +532,7 @@ function renderMetaText(s) {
     const age = Number(m.age_s) || 0;
     const when = age < 90 ? Math.round(age) + 's ago' : Math.round(age / 60) + ' min ago';
     he.style.display = '';
-    he.textContent = 'heard ' + (m.src || '?') + ': ' + m.text + ' \\u2014 ' + when;
+    he.textContent = 'heard ' + (m.src || '?') + ': ' + m.text + ' \u2014 ' + when;
     he.className = 'note' + (age > 300 ? ' gpsstale' : '');
   } else {
     he.style.display = 'none';
