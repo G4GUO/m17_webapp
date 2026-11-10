@@ -16,6 +16,7 @@ let reconnectDelay = 500;
 let st = {};                       // last state message
 let audioReady = false;
 let audioOff = false;               // stopped on purpose, as opposed to never started
+let linkUp = false;                 // socket open - not the same as safe to key
 let txHeld = false;
 
 // ---------------------------------------------------------------------------
@@ -30,12 +31,14 @@ function connect() {
     reconnectDelay = 500;
     $('link').textContent = 'online';
     $('link').className = 'link on';
-    $('pttbtn').disabled = false;
+    linkUp = true;
+    paintPtt();                    // a live socket is not a licence to key: paintPtt decides
   };
   ws.onclose = () => {
     $('link').textContent = 'offline';
     $('link').className = 'link off';
-    $('pttbtn').disabled = true;
+    linkUp = false;
+    paintPtt();
     setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 8000);
   };
@@ -1362,17 +1365,32 @@ function paintAudioButton() {
     : 'Ask the browser for the microphone and play the received audio';
 }
 
-// With the microphone routed to mute nothing can feed a carrier, and the station
-// refuses "tx" - so the key is dead rather than dangerous.  Say so on the button
-// instead of letting it look broken.
+// With nothing able to feed the microphone the key only sends silence, so it is
+// dead rather than dangerous.  That covers a route of mute, and - the case that
+// matters on a phone - the browser route before this page has enabled its audio:
+// a fresh page otherwise keyed the station from a single stray tap.  Any other
+// route belongs to something that really is feeding the station (the phone app,
+// the sound card, Bluetooth, the assistant), so the page may key those.
 function paintPtt() {
   const b = $('pttbtn');
   if (!b) return;
-  const dead = (st.mic_route || '') === 'mute';
+  const route = st.mic_route || '';
+  const dead = !linkUp || route === '' || route === 'mute' || (route === 'browser' && !audioReady);
   b.disabled = dead;
-  b.title = dead
-    ? 'No microphone is selected - the station would transmit silence. Press "enable browser audio" (or set a route in Audio configuration).'
-    : '';
+  // A phone has no hover, so the reason goes in the button's own hint line, where
+  // a dead PTT cannot read as a broken page.
+  const hint = b.querySelector('.hint');
+  if (hint) {
+    hint.textContent = !dead ? '(or hold space)'
+      : !linkUp ? '(offline)'
+      : route === '' ? '(waiting for the station)'
+      : route === 'browser' ? '(browser audio is off)'
+      : '(no microphone)';
+  }
+  b.title = !dead ? ''
+    : route === 'browser'
+      ? 'Browser audio is off, so there is no microphone to transmit - press "enable browser audio" first.'
+      : 'No microphone can feed the transmitter (the route is ' + (route || 'unknown') + '), so the station would send silence.';
 }
 
 // Release the transmitter from outside the PTT handlers: the same things the

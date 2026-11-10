@@ -99,15 +99,16 @@ static void bt_sync_routes(void){
 	save_line_to_config("mic", line);
 }
 
-// A frequency in the form an operator reads it: "437.450000 MHz (437450000 Hz)".
-// Integer arithmetic throughout, so nothing rounds a channel plan.
+// A frequency in MHz, which is how an operator reads it and how the panel shows
+// it.  Integer arithmetic (whole MHz, then the remainder as six digits) so a
+// channel plan is never rounded by a float, and no Hz figure on the end: on a
+// phone that line has to fit.
 static void mmi_report_freq(const char *what, uint64_t hz) {
-	char line[80];
-	snprintf(line, sizeof line, "%s frequency: %llu.%06llu MHz (%llu Hz)",
+	char line[64];
+	snprintf(line, sizeof line, "%s frequency: %llu.%06llu MHz",
 	         what,
 	         (unsigned long long)(hz / 1000000ULL),
-	         (unsigned long long)(hz % 1000000ULL),
-	         (unsigned long long)hz);
+	         (unsigned long long)(hz % 1000000ULL));
 	gui_cmd_resp(line);
 }
 
