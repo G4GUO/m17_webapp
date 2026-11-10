@@ -99,8 +99,6 @@ main { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5r
 @media (max-width: 1000px) { main { grid-template-columns: minmax(0, 1fr); } .col { grid-column: auto; } }
 @media (max-width: 760px) {
   .col { grid-template-columns: minmax(0, 1fr); }
-  /* Thumb territory: a taller key, so a finger that drifts still holds it. */
-  .ptt-button { min-height: 6.4rem; font-size: 1.15rem; }
 }
 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: .6rem; padding: .34rem .5rem; }
@@ -180,6 +178,12 @@ button, [role="button"] {
 .ptt-button .hint { display: block; font-size: .7rem; font-weight: 400; color: var(--dim); }
 .ptt-button.live { background: linear-gradient(180deg, #a02828, #771d1d); border-color: var(--red); color: #fff; }
 .ptt-button:disabled { filter: grayscale(.6); }
+/* Thumb territory: a taller key, so a finger that drifts still holds it.  This
+   has to sit after the rule above - a media query adds no specificity, so an
+   earlier one loses to the later base rule. */
+@media (max-width: 760px) {
+  .ptt-button { min-height: 7rem; font-size: 1.15rem; }
+}
 
 /* Bluetooth audio dialog */
 #btdlg, #audiodlg {
