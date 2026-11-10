@@ -521,7 +521,7 @@ function renderMetaText(s) {
   if (box && document.activeElement !== box) box.value = own;
   const flag = $('mtextflag');
   if (flag) {
-    flag.textContent = !own ? 'off' : (g.tx ? 'position first' : 'on air');
+    flag.textContent = !own ? 'off' : (g.tx ? 'position first' : 'set');
     flag.className = 'badge' + (own && !g.tx ? ' ok' : '');
   }
   const cnt = $('mtextcount');

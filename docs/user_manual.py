@@ -34,7 +34,7 @@ from reportlab.platypus import (
 
 TITLE = "m17web User Manual"
 SUBTITLE = "M17 digital voice on a Raspberry Pi with an SDR, driven from your web browser"
-VERSION = "Version 1.2 \u2014 " + date.today().strftime("%d %B %Y")
+VERSION = "Version 1.3 \u2014 " + date.today().strftime("%d %B %Y")
 
 MARGIN = 2.7 * cm                 # ~87 characters per line: comfortable for body text
 FRAME_W = A4[0] - 2 * MARGIN      # usable width between the margins
@@ -332,6 +332,26 @@ def build(path: str) -> None:
            "the setting is remembered when you next start the program. Unplugging the receiver also works, "
            "if you want no position at all.")
 
+    m.h2("A text instead of a position")
+    m.p("The M17 link setup has one small field for extra information, called META, and only one kind "
+        "of payload fits in it at a time. With a fresh fix that payload is your position. Without one - "
+        "no receiver, or no fix yet - it can instead be a short text that you set once and leave alone, "
+        "which is the META text card next to the Position panel. It is announced while you transmit, "
+        "instead of the position, and never at the same time as it.")
+    m.bullets([
+        "<b>Setting it.</b> Type up to 52 characters into the box and press <b>set</b>. It is kept for "
+        "the next start, and <b>clear</b> stops it being announced.",
+        "<b>Priority.</b> Whenever there is a fresh fix and position announcing is on, the position wins "
+        "and the text is not sent. The badge reads <b>position first</b> in that case, and <b>set</b> "
+        "when the text is what goes out.",
+        "<b>It is public.</b> The text travels with every transmission in clear, exactly as the position "
+        "does, so it is visible to anyone listening and to any client that displays the field.",
+        "<b>Hearing one.</b> A text another station announces appears in the console as "
+        "<b>RX META [G4ABC] ...</b> and is shown, newest first, in the same card - overwritten each time "
+        "a new one arrives. Four separate transmissions of a long one are collected together before it is "
+        "shown, which takes about a second.",
+    ])
+
     m.h2("Keeping a log of your position")
     m.p("Tick <b>log to CSV</b> in the Position panel and a row is added to a file every few seconds, "
         "which you can open in a spreadsheet: date, time, latitude, longitude, locator, altitude, speed, "
@@ -566,6 +586,14 @@ def build(path: str) -> None:
         "station you are hearing is, and the tick box that keeps a log of your position in a file. "
         "Section 5 explains what each part means.")
 
+    m.h2("META text")
+    m.p("One line box and two buttons. <b>set</b> keeps the text and it is announced in the META field "
+        "of every transmission while there is no position to announce; <b>clear</b> stops that. The badge "
+        "says which payload is going out: <b>off</b> (nothing set), <b>set</b>, or <b>position first</b> "
+        "when a position is being sent instead. Underneath, the last text heard from any station is shown "
+        "with its callsign and how long ago it arrived, overwritten as new ones come in. Section 5 "
+        "explains the field itself.")
+
     m.h2("Audio")
     m.table([
         ["Control", "What it does"],
@@ -643,6 +671,9 @@ def build(path: str) -> None:
         ["gps meta off", "Stop sending your position to other stations; <b>gps meta on</b> starts again. The "
                          "receiver keeps running, so the locator, the compass and the log are unaffected - "
                          "see section 5."],
+        ["meta text WORDS", "Keep a text of up to 52 characters and announce it in the META field whenever "
+                            "there is no position to announce. Remembered for the next start - see section 5."],
+        ["meta text off", "Stop announcing the text; the position is then the only thing in META."],
         ["csv on / csv off", "Start or stop logging your position to a file - see section 5."],
         ["csv 10", "Log a row every 10 seconds rather than every 5."],
         ["csv status", "Show the log file and how many rows it holds."],
