@@ -75,44 +75,55 @@ static uint32_t tx_now_ms(void){
     return (uint32_t)(t.tv_sec * 1000 + t.tv_nsec / 1000000);
 }
 
-static void m17_tx_meta_idle(void){
-    // Nothing to announce: the position is switched off, or there is no usable
-    // fix.  The configured META text takes its turn here.  It cannot go out
-    // alongside a position - the TYPE subtype bits say which payload is in META
-    // - so the position wins whenever there is one, and this is the fallback.
-    if (meta_text_fill(m_meta)) {
-        m_type.est = META_TEXT;
-        m_gnss_tx  = false;
-        return;
-    }
-    if (m_gnss_tx) {
-        // No text either: leave META empty (control byte 0 = "no text") rather
-        // than letting a stale position stand.
-        memset(m_meta, 0, sizeof(m_meta));
-        m_type.est = META_TEXT;
-        m_gnss_tx  = false;
-    }
+// What this transmission puts in META.  The TYPE field says how to read it, and
+// the TYPE may only change between transmissions, so the choice is made once at
+// key-down; only the contents are refreshed at the superframe boundaries after
+// that.  Changing the kind mid-over would leave the LSF's type describing the
+// wrong payload, which the specification does not allow either.
+enum { META_KIND_NONE = 0, META_KIND_TEXT, META_KIND_POSITION };
+static uint8_t m_meta_kind = META_KIND_NONE;
+
+// Control byte 0 says "no text": an empty field rather than a stale position.
+static void m17_tx_meta_empty(void){
+    memset(m_meta, 0, sizeof(m_meta));
+    m_type.est = META_TEXT;
+    m_gnss_tx  = false;
+}
+
+static bool m17_tx_meta_fresh_fix(void){
+    return m_gnss_enable && gps_fix_fresh(30000);
 }
 
 static void m17_tx_meta_from_gps(bool force){
-    if (!m_gnss_enable) {
-        // Switched off from the console or the page: drop the position from the
-        // META field so it stops being announced from the next frame onwards.
-        m17_tx_meta_idle();
+    if (force) {
+        // Key-down: a text that has been set is the payload the operator asked
+        // for, so it wins over the position; with no text the position goes, and
+        // with neither the field stays empty.  Setting a text and clearing it is
+        // how the text is switched on and off.
+        if (meta_text_get()[0])           m_meta_kind = META_KIND_TEXT;
+        else if (m17_tx_meta_fresh_fix()) m_meta_kind = META_KIND_POSITION;
+        else                              m_meta_kind = META_KIND_NONE;
+    }
+
+    if (m_meta_kind == META_KIND_TEXT) {
+        // One block per superframe, cycling: a receiver collects up to four.
+        if (!meta_text_fill(m_meta)) m17_tx_meta_empty();  // cleared mid-over
+        m_type.est = META_TEXT;
+        m_gnss_tx  = false;
         return;
     }
-    if (!gps_fix_fresh(30000)) {
-        // No usable fix: announce nothing rather than a stale position.
-        m17_tx_meta_idle();
+    if (m_meta_kind == META_KIND_POSITION) {
+        if (!m17_tx_meta_fresh_fix()) { m17_tx_meta_empty(); return; }
+        uint32_t now = tx_now_ms();
+        if (!force && (now - m_gnss_tx_ms) < 5000) return;
+        GpsMsg g = m_gps;                       // copy: the reader thread updates it
+        gps_encode(m_meta, &g);
+        m_type.est   = META_GNSS;
+        m_gnss_tx    = true;
+        m_gnss_tx_ms = now;
         return;
     }
-    uint32_t now = tx_now_ms();
-    if (!force && (now - m_gnss_tx_ms) < 5000) return;
-    GpsMsg g = m_gps;                       // copy: the reader thread updates it
-    gps_encode(m_meta, &g);
-    m_type.est = META_GNSS;
-    m_gnss_tx  = true;
-    m_gnss_tx_ms = now;
+    m17_tx_meta_empty();
 }
 
 bool m17_tx_gnss(void){

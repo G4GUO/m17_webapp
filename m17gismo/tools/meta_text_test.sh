@@ -4,9 +4,9 @@
 #
 # Starts an instance on a simulated radio, which loops its own transmission back
 # to itself, then reads back the text it heard announced in the META field it
-# just sent.  The position is switched off for every phase, because the position
-# and the text share the one META payload and the position always wins - that is
-# the whole point of the fallback.
+# just sent.  The position is left announcing, because the text has to win the
+# field while it is set: set switches the text on, clear switches it off and
+# hands the field back to the position.  Only one payload fits in META at a time.
 #
 # Three phases, each on a FRESH instance and so a fresh receiver:
 #   set     the text is set from the command line, and must be heard back
@@ -55,8 +55,6 @@ run_phase() {
     find_ours
     [ -n "$OURS" ] || { echo "  text=$MODE FAIL: the test instance did not start"; tail -5 "$WORK/run.log"; return 2; }
     ask "sa G4GUO" 2
-    # The position shares the META field and takes priority, so it is off here.
-    ask "gps meta off" 1
     case "$MODE" in
         set)    ask "meta text $PHRASE" 1 ;;
         seeded) : ;;                      # config.txt already said it

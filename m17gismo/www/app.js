@@ -521,8 +521,10 @@ function renderMetaText(s) {
   if (box && document.activeElement !== box) box.value = own;
   const flag = $('mtextflag');
   if (flag) {
-    flag.textContent = !own ? 'off' : (g.tx ? 'position first' : 'set');
-    flag.className = 'badge' + (own && !g.tx ? ' ok' : '');
+    // set and clear are the switch: a text that is set is what META carries,
+    // so there is no third state to report.
+    flag.textContent = own ? 'on' : 'off';
+    flag.className = 'badge' + (own ? ' ok' : '');
   }
   const cnt = $('mtextcount');
   if (cnt) cnt.textContent = own ? own.length + ' of ' + (box ? box.maxLength : 52) : '';
@@ -605,7 +607,11 @@ function renderPosition(s) {
     : '';
 
   const flag = $('gnssflag');
-  if (g.meta === false) {
+  if (s.mtext && s.mtext.send) {
+    // A text that is set takes the META field, so the position is not going out.
+    flag.textContent = 'text instead';
+    flag.className = 'badge';
+  } else if (g.meta === false) {
     // The switch is off: say that, rather than implying anything is being sent.
     flag.textContent = 'position off air';
     flag.className = 'badge';
