@@ -100,8 +100,10 @@ int radio_open(RadioType type){
 			// keep running with the simulator so the web UI stays up and the
 			// reason is visible, instead of dying.
 			fprintf(stderr,
-			        "m17web: Pluto not reachable - check the USB network interface\n"
-			        "        (e.g. eth1 with 192.168.2.2/24, then the Pluto answers on 192.168.2.1)\n");
+			        "m17web: no usable Pluto - either it is not there (check the USB\n"
+			        "        network interface: eth1 with 192.168.2.2/24, then it answers\n"
+			        "        on 192.168.2.1) or it answered but gave no streaming buffer\n"
+			        "        (its stream is stuck - unplug it and plug it back in)\n");
 #ifdef HAVE_SIM
 			fprintf(stderr, "m17web: falling back to the simulated radio (-r sim)\n");
 			m_radio_type = RADIO_TYPE_SIM;
