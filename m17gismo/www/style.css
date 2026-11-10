@@ -18,6 +18,9 @@
 body {
   margin: 0; background: var(--bg); color: var(--fg);
   font: .95rem/1.38 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* iOS inflates text on its own in landscape and after a zoom, which changes the
+     layout width under the operator; ask for the size we actually set. */
+  -webkit-text-size-adjust: 100%; text-size-adjust: 100%;
 }
 header {
   display: flex; align-items: center; gap: .9rem;
@@ -316,3 +319,16 @@ p:empty, span.lbl:empty, .note:empty { display: none; }
 .dialcap { position: absolute; top: 47px; left: 0; right: 0; text-align: center;
            font-size: .66rem; color: #9fb0bf; text-transform: uppercase; letter-spacing: .09em;
            pointer-events: none; }
+
+/* Phones.  Two things here, both about the page not moving under the operator.
+   A focused field whose text is under 16 px makes iOS Safari zoom the whole page -
+   the classic "the keyboard opened and the send button is off the screen", fixed
+   afterwards with a two-finger pinch.  16 px stops the zoom.  And a field that can
+   grow must be allowed to shrink (min-width: 0), otherwise its intrinsic width
+   pushes the button beside it out of the row.  The block sits at the end of the
+   file so it wins: @media adds no specificity, only position. */
+@media (max-width: 760px) {
+  input, select, textarea, #cmdform input, #smsinput { font-size: 16px; }
+  #smsinput, #cmdform input { flex: 1 1 6rem; min-width: 0; }
+  #smsinput + button, #cmdform button { flex: 0 0 auto; }
+}
