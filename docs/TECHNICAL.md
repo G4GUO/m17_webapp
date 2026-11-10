@@ -104,7 +104,7 @@ Needs gcc/g++, make, **Codec2** built from source, and whichever of libiio
 
     sudo apt install libiio-dev limesuite liblimesuite-dev libpulse-dev
 
-    cd m17_sdr_web/m17gismo
+    cd ~/m17web-src/m17gismo
     make LIME=1 SIM=1 CODEC2_BACKEND=mod   # what the station runs
     make sim            # no SDR hardware, no PulseAudio: web UI + simulator
     make console        # legacy ncurses interface
@@ -677,7 +677,7 @@ The Pluto drops off USB from time to time (it re-enumerated at 20:29 on 13 Oct
 Run m17web under systemd so it comes back on its own:
 
 ```bash
-cd /mnt/hf/shared/projects/m17_sdr_web
+cd ~/m17web-src
 sudo cp m17gismo/tools/m17web.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now m17web

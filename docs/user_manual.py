@@ -252,7 +252,7 @@ def build(path: str) -> None:
     m.p("m17web is started from a terminal on the Pi. If someone else set the system up for you, it "
         "may already be running \u2014 in that case go straight to section 4.")
     m.p("<b>Start it</b> (this also works after a reboot):")
-    m.code("cd /mnt/hf/shared/projects/m17_sdr_web/m17gismo<br/>"
+    m.code("cd ~/m17web-src/m17gismo<br/>"
            "RADIO=pluto MODE=radio bash tools/pi_m17web.sh start -a alsa")
     m.p("It keeps running after you close the terminal window. <b>Check it:</b>")
     m.code("bash tools/pi_m17web.sh status")
@@ -731,7 +731,7 @@ def build(path: str) -> None:
     m.pagebreak()
     m.h1("12. Quick reference")
     m.h2("Start it")
-    m.code("cd /mnt/hf/shared/projects/m17_sdr_web/m17gismo<br/>"
+    m.code("cd ~/m17web-src/m17gismo<br/>"
            "RADIO=pluto MODE=radio bash tools/pi_m17web.sh start -a alsa")
     m.h2("Open it")
     m.code("http://10.168.1.33:8080/     (your own Pi's address)")

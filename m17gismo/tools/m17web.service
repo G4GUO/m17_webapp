@@ -1,11 +1,29 @@
 # m17web as a supervised service.
 #
-# Install on the Pi (from the repository root):
+# Install (from the repository root, on the machine that runs the station):
 #   sudo cp m17gismo/tools/m17web.service /etc/systemd/system/
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now m17web
 #
 # Then: systemctl status m17web | journalctl -u m17web -f | systemctl restart m17web
+#
+# TWO THINGS TO EDIT BEFORE THE FIRST START
+#
+#   1. The account name.  User=, Group= and the paths below are written for
+#      `charles`, the account both stations use.  For another account:
+#        sudo sed -i "s/^User=charles/User=YOU/; s/^Group=charles/Group=YOU/; \
+#                     s|/home/charles|/home/YOU|g" /etc/systemd/system/m17web.service
+#      (Substitute the real values; the sed line is documentation, not a script.)
+#
+#   2. The layout, which is what `tools/station-sync.sh` creates:
+#        /home/charles/m17web-src   a clone of https://github.com/G4GUO/m17_webapp
+#        /home/charles/m17web       runtime directory: config.txt, M17Hosts.txt, www/
+#
+#      Do NOT write these paths as %h.  In a system unit %h expands to the home of
+#      the account the service *manager* runs as, not of User= - it comes out as
+#      /root, and the unit then fails with "Changing to the requested working
+#      directory failed: Permission denied".  Verified the hard way on 10 Nov
+#      2026.  Literal paths, and the sed above, are the reliable form.
 #
 # Restart=always is the point of it: the Pluto disappears and re-appears on USB
 # from time to time (it did at 20:29 on 13 Oct 2026), and without supervision a
@@ -13,8 +31,8 @@
 #
 [Unit]
 Description=m17web - M17 digital voice over SDR (web interface)
-Documentation=file:///mnt/hf/shared/projects/m17_sdr_web/README.md
-After=network-online.target
+Documentation=https://github.com/G4GUO/m17_webapp/blob/master/README.md
+After=network-online.target sound.target
 Wants=network-online.target
 
 [Service]
@@ -28,15 +46,22 @@ Group=charles
 # sample can never decide how the station runs.
 WorkingDirectory=/home/charles/m17web
 # The Pluto presents itself as a USB network interface: give it its address
-# before starting, and ignore failure if it is already configured.
+# before starting, and ignore failure if it is already configured.  The leading
+# '-' hides those failures, so the capability below has to be here as well -
+# without it each line answers "Operation not permitted" and systemd says
+# nothing at all about it.
 ExecStartPre=-/usr/bin/ip link set eth1 up
 ExecStartPre=-/usr/bin/ip addr add 192.168.2.2/24 dev eth1
-ExecStartPre=/bin/sleep 3
+ExecStartPre=-/bin/sleep 3
+AmbientCapabilities=CAP_NET_ADMIN
 # -r pluto: the real radio (use -r sim to practise without one)
 # -a alsa:  the Pi's sound card, directly (see the README on the sound card)
-ExecStart=/mnt/hf/shared/projects/m17_sdr_web/m17gismo/m17web -r pluto -w 8080 -a alsa
+# -p <addr>: only needed when the Pluto is not on its default 192.168.2.1
+ExecStart=/home/charles/m17web-src/m17gismo/m17web -r pluto -w 8080 -a alsa
 Restart=always
 RestartSec=5
+# Audio timing is worth a little priority, and it needs no privilege to ask.
+Nice=-5
 # Output goes to the journal: journalctl -u m17web -f
 # (systemd refuses StandardOutput=append:/tmp/... here - it cannot set up the
 # redirect for the child processes and the unit aborts with 209/STDOUT.)
