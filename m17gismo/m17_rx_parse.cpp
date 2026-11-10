@@ -6,6 +6,7 @@
 #include "m17defines.h"
 #include "m17_ax25.h"
 #include "m17_sms.h"
+#include "m17_meta_text.h"
 
 // Receive-path tracing: build with DIAG=1 (makefile) to enable.
 #ifdef M17WEB_DIAG
@@ -81,6 +82,15 @@ uint32_t gps_rx_age_ms(void){
 static void valid_lsf_received(uint48_t src_add, uint48_t dst_add, uint8_t *meta, M17Type type){
 	m17_db_set_rx_src( src_add );
 	m17_db_set_rx_dst( dst_add );
+	// Text Data: up to four 13-byte blocks, one per superframe, accumulated
+	// here per station.  The module logs a complete message once.
+	if (type.et == 0 && type.est == META_TEXT) {
+	    char call[16];
+	    m17_decode_call(src_add, call);
+	    for (int k = (int)strlen(call) - 1; k >= 0 && call[k] == ' '; k--)
+	        call[k] = 0;
+	    meta_text_rx(meta, call);
+	}
 	// A station announcing where it is. The LSF repeats every superframe (240 ms),
 	// so the log line is throttled.
 	if (type.et == 0 && type.est == META_GNSS) {

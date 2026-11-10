@@ -11,6 +11,7 @@
 #include "m17_mailbox.h"
 #include "fargan.h"   // receive-only neural synthesis; a stub unless FARGAN_RX
 #include "recorder.h" // optional capture of the decoded audio as a WAV
+#include "m17_meta_text.h" // Text Data carried in the LSF META field
 // codec2 (or the modified codec through codec2mod/codec2_shim.h) is included by
 // m17defines.h according to CODEC2_BACKEND.
 
@@ -74,24 +75,35 @@ static uint32_t tx_now_ms(void){
     return (uint32_t)(t.tv_sec * 1000 + t.tv_nsec / 1000000);
 }
 
+static void m17_tx_meta_idle(void){
+    // Nothing to announce: the position is switched off, or there is no usable
+    // fix.  The configured META text takes its turn here.  It cannot go out
+    // alongside a position - the TYPE subtype bits say which payload is in META
+    // - so the position wins whenever there is one, and this is the fallback.
+    if (meta_text_fill(m_meta)) {
+        m_type.est = META_TEXT;
+        m_gnss_tx  = false;
+        return;
+    }
+    if (m_gnss_tx) {
+        // No text either: leave META empty (control byte 0 = "no text") rather
+        // than letting a stale position stand.
+        memset(m_meta, 0, sizeof(m_meta));
+        m_type.est = META_TEXT;
+        m_gnss_tx  = false;
+    }
+}
+
 static void m17_tx_meta_from_gps(bool force){
     if (!m_gnss_enable) {
         // Switched off from the console or the page: drop the position from the
         // META field so it stops being announced from the next frame onwards.
-        if (m_gnss_tx) {
-            memset(m_meta, 0, sizeof(m_meta));
-            m_type.est = META_TEXT;
-            m_gnss_tx = false;
-        }
+        m17_tx_meta_idle();
         return;
     }
     if (!gps_fix_fresh(30000)) {
         // No usable fix: announce nothing rather than a stale position.
-        if (m_gnss_tx) {
-            memset(m_meta, 0, sizeof(m_meta));
-            m_type.est = META_TEXT;
-            m_gnss_tx = false;
-        }
+        m17_tx_meta_idle();
         return;
     }
     uint32_t now = tx_now_ms();
@@ -306,7 +318,14 @@ void *m17_txrx_thread(void *arg){
 #endif
 			    // New superframe: the LICH is starting again, so this is the point
 			    // at which the META field (and the position in it) may change.
-			    if (m17_tx_lich_index() == 0) m17_tx_meta_from_gps(false);
+			    if (m17_tx_lich_index() == 0) {
+				// The six stream frames of a superframe carry the whole
+				// LSF, so this is the only point at which META may change.
+				// Rewrite the LICH - and its CRC, which sits in the last
+				// chunk - with what the next six frames will announce.
+				m17_tx_meta_from_gps(false);
+				m17_update_meta(m_meta);
+			    }
 			    // Send Sub frame
 			    m17_send_stream_frame( payload );
 			    // A clip played from a file ends where the file ends: no timing
@@ -374,7 +393,14 @@ void *m17_txrx_thread(void *arg){
 			    codec2_encode(m_codec2, &payload[8], m_amicsamples);
 			    // New superframe: the LICH is starting again, so this is the point
 			    // at which the META field (and the position in it) may change.
-			    if (m17_tx_lich_index() == 0) m17_tx_meta_from_gps(false);
+			    if (m17_tx_lich_index() == 0) {
+				// The six stream frames of a superframe carry the whole
+				// LSF, so this is the only point at which META may change.
+				// Rewrite the LICH - and its CRC, which sits in the last
+				// chunk - with what the next six frames will announce.
+				m17_tx_meta_from_gps(false);
+				m17_update_meta(m_meta);
+			    }
 			    // Send Sub frame
 			    m17_send_stream_frame( payload );
 			    // A clip played from a file ends where the file ends: no timing
@@ -460,7 +486,14 @@ void *m17_txrx_client_thread(void *arg){
 			    // Read Audio samples and encode using Codec 2
 			    audio_input(m_amicsamples, m_nsam);
 			    codec2_encode(m_codec2, &payload[8], m_amicsamples);
-			    if (m17_tx_lich_index() == 0) m17_tx_meta_from_gps(false);
+			    if (m17_tx_lich_index() == 0) {
+				// The six stream frames of a superframe carry the whole
+				// LSF, so this is the only point at which META may change.
+				// Rewrite the LICH - and its CRC, which sits in the last
+				// chunk - with what the next six frames will announce.
+				m17_tx_meta_from_gps(false);
+				m17_update_meta(m_meta);
+			    }
 			    // Send Sub frame
 			    m17_send_stream_frame_to_net( payload );
 			    radio_power_update();

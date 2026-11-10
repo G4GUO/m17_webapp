@@ -159,6 +159,19 @@
     </div>
 
     <div class="card">
+      <h2>META text <span class="badge" id="mtextflag">off</span></h2>
+      <div class="row">
+        <input id="mtext" maxlength="52" placeholder="announced when there is no position">
+        <button id="mtextset">set</button>
+      </div>
+      <div class="row">
+        <button id="mtextoff" class="mini">clear</button>
+        <span class="lbl" id="mtextcount">0 of 52</span>
+      </div>
+      <p class="note" id="mtextheard" style="display:none"></p>
+    </div>
+
+    <div class="card">
       <h2>Mode</h2>
       <div class="grid2">
         <label class="chk"><input type="radio" name="mode" value="radio"> radio &mdash; normal</label>
@@ -275,6 +288,6 @@
     <button id="btclose" class="mini">close</button>
   </div>
 </dialog>
-<script src="/app.js?v=22"></script>
+<script src="/app.js?v=23"></script>
 </body>
 </html>

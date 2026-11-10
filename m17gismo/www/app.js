@@ -162,6 +162,7 @@ function applyState(s) {
   renderAudio(s);
   renderTxHealth(s);
   renderPosition(s);
+  renderMetaText(s);
   renderCompass(s);
   renderHwPtt(s);
   renderMode(s);
@@ -508,6 +509,36 @@ function renderMixer(s) {
 
 // Transmit health: blank frames sent before the voice, and how much microphone
 // audio the transmitter lost this session (card overruns, or padded silence).
+// The text this station announces in the META field when it has no position to
+// announce, and the last one heard from anyone.  One line each, overwritten as
+// new text arrives.  A position and a text cannot both be on air - the LSF
+// subtype bits say which is in META - so the badge says which one is going out.
+function renderMetaText(s) {
+  const m = s.mtext || {};
+  const g = s.gps || {};
+  const own = m.send || '';
+  const box = $('mtext');
+  if (box && document.activeElement !== box) box.value = own;
+  const flag = $('mtextflag');
+  if (flag) {
+    flag.textContent = !own ? 'off' : (g.tx ? 'position first' : 'on air');
+    flag.className = 'badge' + (own && !g.tx ? ' ok' : '');
+  }
+  const cnt = $('mtextcount');
+  if (cnt) cnt.textContent = own.length + ' of ' + (box ? box.maxLength : 52);
+  const he = $('mtextheard');
+  if (!he) return;
+  if (m.text) {
+    const age = Number(m.age_s) || 0;
+    const when = age < 90 ? Math.round(age) + 's ago' : Math.round(age / 60) + ' min ago';
+    he.style.display = '';
+    he.textContent = 'heard ' + (m.src || '?') + ': ' + m.text + ' \\u2014 ' + when;
+    he.className = 'note' + (age > 300 ? ' gpsstale' : '');
+  } else {
+    he.style.display = 'none';
+  }
+}
+
 // Position: the GPS fix, and the Maidenhead locator computed from it
 function renderPosition(s) {
   const g = s.gps || {};
@@ -921,6 +952,22 @@ function wire() {
   $('csvtick').onchange = (e) => cmd('csv ' + (e.target.checked ? 'on' : 'off'));
   if ($('metatick'))
     $('metatick').onchange = (e) => cmd('gps meta ' + (e.target.checked ? 'on' : 'off'));
+
+  // META text: the words this station puts in META when it has no position
+  // rather than the words it hears from someone else.
+  const mtsend = () => {
+    const b = $('mtext');
+    if (!b) return;
+    const t = b.value.trim();
+    cmd(t ? 'meta text ' + t : 'meta text');
+  };
+  if ($('mtextset')) $('mtextset').onclick = mtsend;
+  if ($('mtextoff')) $('mtextoff').onclick = () => cmd('meta text off');
+  if ($('mtext')) {
+    $('mtext').onkeydown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); mtsend(); }
+    };
+  }
 
   document.querySelectorAll('input[name=mode]').forEach((r) => {
     r.onchange = () => { if (r.checked) cmd('mode ' + r.value); };

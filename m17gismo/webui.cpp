@@ -27,6 +27,7 @@
 #include <pthread.h>
 
 #include "m17defines.h"
+#include "m17_meta_text.h"
 #include "bluetooth.h"
 #include "webserver.h"
 #include "audio.h"
@@ -429,6 +430,23 @@ static void build_state(char *out, int len) {
                      m_gps.hdop, (int)m_gps.nsats, gps_fix_age_ms() / 1000.0, dev,
                      gps_csv_on() ? "true" : "false", gps_csv_path(),
                      gps_csv_rows(), gps_csv_interval());
+    }
+    {
+        // META text: what this station announces when it has no position to
+        // announce, and the last text heard from anyone - one line each in the
+        // page, overwritten as new text arrives.
+        char esc[META_TEXT_MAX * 2 + 8], msrc[16], mtxt[META_TEXT_MAX + 1];
+        uint32_t mage = 0;
+        json_escape(meta_text_get(), esc, sizeof esc);
+        o = json_add(out, len, o, ",\"mtext\":{\"send\":\"%s\"", esc);
+        if (meta_text_last(msrc, sizeof msrc, mtxt, sizeof mtxt, &mage)) {
+            char esrc[40], etxt[META_TEXT_MAX * 2 + 8];
+            json_escape(msrc, esrc, sizeof esrc);
+            json_escape(mtxt, etxt, sizeof etxt);
+            o = json_add(out, len, o, ",\"src\":\"%s\",\"text\":\"%s\",\"age_s\":%.1f",
+                         esrc, etxt, mage / 1000.0);
+        }
+        o = json_add(out, len, o, "}");
     }
     {
         // Hardware PTT on the Pi's header (see rpi_gpio.cpp)

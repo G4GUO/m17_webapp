@@ -7,6 +7,7 @@
 #include "m17_ax25.h"
 #include "m17_mailbox.h"
 #include "m17_sms.h"
+#include "m17_meta_text.h"
 #include "audio.h"
 #include "bluetooth.h"
 #include "fargan.h"
@@ -154,6 +155,43 @@ void mmi_parse(char *cmd){
 		}
 		printf("%s\n", line);
 		gui_cmd_resp(line);
+		gui_update();
+		return;
+	}
+
+	// Text carried in the LSF META field.  Like sms, the rest of the line is
+	// taken verbatim, so it is handled before the tokeniser folds the case and
+	// eats the spaces.  meta text alone reports; off clears it.
+	if(strncasecmp(cmd,"meta text",9)==0 && (cmd[9] == 0 || cmd[9] == ' ')){
+		char line[400];
+		const char *p = cmd + 9;
+		while(*p == ' ') p++;
+		if(*p == 0){
+			const char *own = meta_text_get();
+			if(own[0])
+				snprintf(line, sizeof line, "META text: %s (%d of %d characters)",
+				         own, (int)strlen(own), META_TEXT_MAX);
+			else
+				snprintf(line, sizeof line,
+				         "META text: none set - meta text <words> sets it, meta text off clears it");
+			printf("%s\n", line);
+			gui_cmd_resp(line);
+		}else if(strcasecmp(p,"off")==0 || strcasecmp(p,"clear")==0 || strcasecmp(p,"none")==0){
+			meta_text_clear();
+			save_line_to_config("meta text", "meta text off");
+			snprintf(line, sizeof line, "META text cleared: only the position is announced now");
+			printf("%s\n", line);
+			gui_cmd_resp(line);
+		}else{
+			meta_text_set(p);
+			snprintf(line, sizeof line, "meta text %s", meta_text_get());
+			save_line_to_config("meta text", line);
+			snprintf(line, sizeof line,
+			         "META text set (%d of %d characters), announced when there is no position",
+			         (int)strlen(meta_text_get()), META_TEXT_MAX);
+			printf("%s\n", line);
+			gui_cmd_resp(line);
+		}
 		gui_update();
 		return;
 	}
