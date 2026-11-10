@@ -51,6 +51,19 @@ header h1 { font-size: 1.15rem; margin: 0; letter-spacing: .06em; color: var(--a
 .smstx { color: var(--fg); white-space: pre-wrap; word-break: break-word; }
 #smsinput { flex: 1; background: rgba(94, 66, 40, .18); border-color: rgba(211, 177, 138, .40); }
 #smshint { margin-top: .2rem; color: var(--tan-dim); }
+/* The META text sits under the SMS box and is dressed like it: both put words
+   on air, and they are the only two cards in the column that are about a
+   message rather than the station. */
+#mtextcard { border-color: rgba(211, 177, 138, .55);
+             background: linear-gradient(180deg, rgba(94, 66, 40, .28), rgba(23, 28, 34, .35) 70%); }
+#mtextcard h2 { color: var(--tan); }
+#mtextcard h2 .lbl { color: var(--tan-dim); margin-left: .4rem; }
+#mtextcard h2 .badge { margin-left: .4rem; }
+#mtextcard .note { margin-top: .2rem; color: var(--tan-dim); }
+#mtext { flex: 1; background: rgba(94, 66, 40, .18); border-color: rgba(211, 177, 138, .40); }
+#mtextset { background: rgba(94, 66, 40, .55); border-color: rgba(211, 177, 138, .55); color: #f3e3cd; }
+#mtextset:hover { background: rgba(120, 84, 48, .70); }
+#mtextoff { background: transparent; border-color: rgba(211, 177, 138, .35); color: var(--tan-dim); }
 #smssend { background: rgba(94, 66, 40, .55); border-color: rgba(211, 177, 138, .55); color: #f3e3cd; }
 #smssend:hover { background: rgba(120, 84, 48, .70); }
 
@@ -279,7 +292,7 @@ header { flex-wrap: wrap; }
 .cmp-deg { display: block; font-weight: 700; font-size: .95rem; margin-top: -.35rem; }
 .compass .lbl { display: block; font-size: .68rem; color: var(--dim); line-height: 1.25; }
 
-.log { height: 20vh; min-height: 130px; overflow-y: auto; background: #0b0e12; border: 1px solid var(--line);
+.log { height: 18vh; min-height: 130px; overflow-y: auto; background: #0b0e12; border: 1px solid var(--line);
   border-radius: .4rem; padding: .45rem; font: .78rem/1.35 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
 .log div { white-space: pre-wrap; word-break: break-word; }
 .log .k-tx { color: var(--red); }

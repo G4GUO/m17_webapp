@@ -336,7 +336,7 @@ def build(path: str) -> None:
     m.p("The M17 link setup has one small field for extra information, called META, and only one kind "
         "of payload fits in it at a time. With a fresh fix that payload is your position. Without one - "
         "no receiver, or no fix yet - it can instead be a short text that you set once and leave alone, "
-        "which is the META text card next to the Position panel. It is announced while you transmit, "
+        "which is the META text card under the SMS box. It is announced while you transmit, "
         "instead of the position, and never at the same time as it.")
     m.bullets([
         "<b>Setting it.</b> Type up to 52 characters into the box and press <b>set</b>. It is kept for "
@@ -587,10 +587,12 @@ def build(path: str) -> None:
         "Section 5 explains what each part means.")
 
     m.h2("META text")
-    m.p("One line box and two buttons. <b>set</b> keeps the text and it is announced in the META field "
-        "of every transmission while there is no position to announce; <b>clear</b> stops that. The badge "
-        "says which payload is going out: <b>off</b> (nothing set), <b>set</b>, or <b>position first</b> "
-        "when a position is being sent instead. Underneath, the last text heard from any station is shown "
+    m.p("The same shape as the SMS box above it, because it puts words on air the same way - but these "
+        "words travel in the link setup of every transmission rather than as a message. <b>set</b> keeps "
+        "up to 52 characters and announces it while there is no position to announce; <b>clear</b> stops "
+        "that. The badge says which payload is going out: <b>off</b> (nothing set), <b>set</b>, or "
+        "<b>position first</b> when a position is being sent instead, and the count beside it is how much "
+        "of the 52 characters you have used. Underneath, the last text heard from any station is shown "
         "with its callsign and how long ago it arrived, overwritten as new ones come in. Section 5 "
         "explains the field itself.")
 
