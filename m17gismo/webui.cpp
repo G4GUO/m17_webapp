@@ -759,6 +759,17 @@ static void web_note_ptt(const char *cmd, int id) {
     }
 }
 
+// Who moved the audio or the key: the ring buffer cannot say, and a route that
+// "keeps defaulting to mute" has to be traceable to a client.  Both command paths
+// (JSON and plain text) come through here.
+static void trace_cmd(const char *cmd, int id) {
+    if (strncasecmp(cmd, "audio", 5) != 0 && strncasecmp(cmd, "tx", 2) != 0 &&
+        strncasecmp(cmd, "rx", 2) != 0) return;
+    const char *r = ws_client_role(m_srv, id);
+    printf("m17web: client %d (%s): %s\n", id, (r && r[0]) ? r : "page", cmd);
+    fflush(stdout);
+}
+
 static void web_on_msg(int id, int is_binary, const uint8_t *data, int len, void *user) {
     (void)user;
     if (is_binary) {
@@ -804,14 +815,7 @@ static void web_on_msg(int id, int is_binary, const uint8_t *data, int len, void
         }
         if (extract_cmd(txt, cmd, sizeof(cmd)) == 0) {
             web_note_ptt(cmd, id);
-            // Who moved the audio or the key: the ring buffer cannot say, and a
-            // route that "keeps defaulting to mute" has to be traceable to a client.
-            if (strncasecmp(cmd, "audio", 5) == 0 || strncasecmp(cmd, "tx", 2) == 0 ||
-                strncasecmp(cmd, "rx", 2) == 0) {
-                const char *r = ws_client_role(m_srv, id);
-                printf("m17web: client %d (%s): %s\n", id, (r && r[0]) ? r : "page", cmd);
-                fflush(stdout);
-            }
+            trace_cmd(cmd, id);
             run_command(cmd);
         }
         return;
@@ -820,6 +824,7 @@ static void web_on_msg(int id, int is_binary, const uint8_t *data, int len, void
     memcpy(cmd, data, n);
     cmd[n] = 0;
     web_note_ptt(cmd, id);
+    trace_cmd(cmd, id);
     run_command(cmd);
 }
 
@@ -829,7 +834,10 @@ static void web_on_tick(void *user) {
     // A keyed station whose client has gone quiet is a stuck carrier: release it.
     if (m_keyed_client >= 0 && m17_txrx_ptt_state() != 0 && !m17_tx_hw_ptt() &&
         web_mic_from_client() && (now_ms() - m_last_mic_ms) > MIC_WATCHDOG_MS) {
-        web_unkey("no microphone audio from the client for 3 s");
+        char why[80];
+        snprintf(why, sizeof why, "no microphone audio from the client for %ld s",
+                 (long)(MIC_WATCHDOG_MS / 1000));
+        web_unkey(why);
     }
     if (m_last_state_ms == 0 || (now_ms() - m_last_state_ms) >= 250) push_state();
 }
