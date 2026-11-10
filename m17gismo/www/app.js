@@ -53,10 +53,21 @@ function connect() {
 function send(text) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(text); }
 function cmd(text) { send(text); }
 
+// The station says which build it is when the socket opens.  A page left open
+// across a deploy otherwise keeps running the old script - which is how a fixed
+// bug can still be on screen hours later - so a changed build reloads the page.
+let bootStamp = null;
+function onHello(m) {
+  const stamp = m.stamp || null;
+  if (bootStamp === null) { bootStamp = stamp; return; }
+  if (stamp && bootStamp && stamp !== bootStamp) location.reload();
+}
+
 function handleJson(txt) {
   let m;
   try { m = JSON.parse(txt); } catch (e) { return; }
   switch (m.t) {
+    case 'hello': onHello(m); break;
     case 'state': applyState(m); break;
     case 'log': addLog(m.kind, m.line); break;
     case 'resp': addLog('resp', m.line); break;
@@ -520,6 +531,7 @@ function renderMixer(s) {
 // station echoes it back, so a frame in flight cannot undo the typing.
 let mtextPending = null;
 let mtextPendingAt = 0;
+let mtextDirty = false;      // the operator has typed since the station last agreed
 
 function posTakesField(g) {
   return !!(g && g.meta !== false && g.valid && g.fresh !== false);
@@ -536,18 +548,21 @@ function renderMetaText(s) {
     return;
   }
   const own = m.send || '';
-  // Do not write into the box until the station has echoed what was sent: the
-  // frames keep arriving while the command is in flight, and a stale empty one
-  // used to wipe the text the moment the button took the focus.
   if (mtextPending !== null) {
     if (own === mtextPending) {
+      // The station has it: the box and the station agree, so it may follow the
+      // state again from here.
       mtextPending = null;
+      mtextDirty = false;
     } else if (Date.now() - mtextPendingAt > 4000) {
       mtextPending = null;
       if (typeof addLog === 'function') addLog('resp', 'the station did not take that META text');
     }
   }
-  if (box && mtextPending === null && document.activeElement !== box) box.value = own;
+  // Only mirror the station when the operator has not typed into the box and
+  // nothing is in flight.  Anything else would throw away words that have not
+  // reached the station yet - which is how this box used to empty itself.
+  if (box && mtextPending === null && !mtextDirty && document.activeElement !== box) box.value = own;
   const flag = $('mtextflag');
   if (flag) {
     // The text is the fallback, so say which one is actually going out.
@@ -994,9 +1009,16 @@ function wire() {
   // META text: the words this station puts in META when it has no position
   // rather than the words it hears from someone else.  set takes whatever is in
   // the box; an empty box means there is no text to send, so it clears.
+  if ($('mtext')) $('mtext').oninput = () => { mtextDirty = true; };
   const mtsend = () => {
     const b = $('mtext');
     if (!b) return;
+    if (!(ws && ws.readyState === WebSocket.OPEN)) {
+      // No socket: say so and leave the text alone.  Sending into the void and
+      // then letting the next frame "correct" the box is what emptied it.
+      addLog('resp', 'the page is not connected: the META text was not sent');
+      return;
+    }
     const t = b.value.trim();
     mtextPending = t;
     mtextPendingAt = Date.now();
