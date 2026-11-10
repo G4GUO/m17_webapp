@@ -513,6 +513,13 @@ function renderMixer(s) {
 // announce, and the last one heard from anyone.  One line each, overwritten as
 // new text arrives.  A position and a text cannot both be on air - the LSF
 // subtype bits say which is in META - so the badge says which one is going out.
+// Will the position take the META field at the next transmission?  If it will, a
+// text that is set is only waiting its turn, and the badges have to say so rather
+// than implying the text is what goes out.
+function posTakesField(g) {
+  return !!(g && g.meta !== false && g.valid && g.fresh !== false);
+}
+
 function renderMetaText(s) {
   const m = s.mtext || {};
   const g = s.gps || {};
@@ -522,8 +529,9 @@ function renderMetaText(s) {
   const flag = $('mtextflag');
   if (flag) {
     // The text is the fallback, so say which one is actually going out.
-    flag.textContent = !own ? 'off' : (g.tx ? 'position first' : 'set');
-    flag.className = 'badge' + (own && !g.tx ? ' ok' : '');
+    const posFirst = posTakesField(g);
+    flag.textContent = !own ? 'off' : (posFirst ? 'position first' : 'set');
+    flag.className = 'badge' + (own && !posFirst ? ' ok' : '');
   }
   const cnt = $('mtextcount');
   if (cnt) cnt.textContent = own ? own.length + ' of ' + (box ? box.maxLength : 52) : '';
@@ -606,8 +614,11 @@ function renderPosition(s) {
     : '';
 
   const flag = $('gnssflag');
-  if (!g.tx && s.mtext && s.mtext.send) {
-    // A text is standing in the field: no fix, or announcing switched off.
+  const textOn = !!(s.mtext && s.mtext.send);
+  // The text only stands in the field when the position cannot: otherwise the
+  // next transmission carries the position and this badge must not imply
+  // anything else.
+  if (textOn && !posTakesField(g)) {
     flag.textContent = 'text instead';
     flag.className = 'badge';
   } else if (g.meta === false) {
