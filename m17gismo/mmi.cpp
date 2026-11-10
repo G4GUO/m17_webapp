@@ -116,19 +116,21 @@ void mmi_parse(char *cmd){
 	//   smslog            state and where it writes
 	//   smslog on|off     turn it on or off, kept for the next start
 	//   smslog file PATH  write somewhere else than sms.log
-	if(strncmp(cmd,"smslog",6)==0 && (cmd[6] == 0 || cmd[6] == ' ')){
+	// Handled before the tokeniser, so the case is folded here as well: a phone
+	// keyboard gives "Smslog on", and this branch used to miss it entirely.
+	if(strncasecmp(cmd,"smslog",6)==0 && (cmd[6] == 0 || cmd[6] == ' ')){
 		char line[320];
 		const char *p = cmd + 6;
 		while(*p == ' ') p++;
-		if(strncmp(p,"on",2)==0){
+		if(strncasecmp(p,"on",2)==0){
 			m17_sms_set_log(1);
 			save_line_to_config("smslog", "smslog on");
 			snprintf(line, sizeof line, "SMS log on: %s", m17_sms_log_path());
-		}else if(strncmp(p,"off",3)==0){
+		}else if(strncasecmp(p,"off",3)==0){
 			m17_sms_set_log(0);
 			save_line_to_config("smslog", "smslog off");
 			snprintf(line, sizeof line, "SMS log off");
-		}else if(strncmp(p,"file ",5)==0){
+		}else if(strncasecmp(p,"file ",5)==0){
 			m17_sms_set_log_path(p + 5);
 			snprintf(line, sizeof line, "smslog file %s", m17_sms_log_path());
 			save_line_to_config("smslog", line);
@@ -145,7 +147,7 @@ void mmi_parse(char *cmd){
 
 	// SMS takes the rest of the line verbatim, so it is handled before the
 	// tokeniser eats the spaces.  sms <text> sends; sms alone reports.
-	if(strncmp(cmd,"sms",3)==0 && (cmd[3] == 0 || cmd[3] == ' ')){
+	if(strncasecmp(cmd,"sms",3)==0 && (cmd[3] == 0 || cmd[3] == ' ')){
 		char        line[400];
 		const char *p = cmd + 3;
 		int         st;
@@ -193,6 +195,14 @@ void mmi_parse(char *cmd){
 		if( ++nt == 10 ) break;
 		token[nt] = strtok(NULL," ");
 	}
+
+	// The phone app's keyboard capitalises the first letter of whatever is
+	// typed - "Tx", "Audio apply ...", "Sa G4GUO" - and every command used to
+	// come back "Invalid command" because the keywords were matched case
+	// sensitively.  Fold the keyword only, never the arguments: token[1..] carry
+	// callsigns, routes, frequencies, paths and SMS text, and a callsign folded
+	// to lower case is a different station.
+	for(char *kw = token[0]; *kw; kw++) *kw = (char)tolower((unsigned char)*kw);
 
 	// Start of commands
 
