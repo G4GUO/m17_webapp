@@ -114,6 +114,17 @@ button:hover { border-color: var(--accent); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 button.mini { font-size: .76rem; padding: .18rem .45rem; }
 
+/* Touch: iOS Safari starts a text selection - with the magnifier loupe and the
+   Copy/Look Up menu - when a press on a button lasts more than about half a
+   second.  On a hold-to-talk button that is every transmission, and the system
+   gesture takes the pointer stream away, so the carrier drops.  A button label
+   is not text anyone wants to select, so opt every button out; the property has
+   to sit on the button itself, and user-select on a container is not enough. */
+button, [role="button"] {
+  -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none;
+}
+
 /* The receive and transmit controls stack, with short sliders: side by side in a
    wide card, the gain sliders stretch across the whole card. */
 .radio-stack { display: flex; flex-direction: column; gap: .28rem; }
