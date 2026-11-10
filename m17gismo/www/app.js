@@ -1272,6 +1272,13 @@ async function startAudio() {
       });
     }
     const rate = audio.ctx.sampleRate;
+    // Keep it awake.  A suspended context silences received audio and stops the
+    // microphone frames, and iOS will not resume it without a nudge, so nudge it.
+    // Noise while running; the pair of them is cleared when the page switches off.
+    if (audio.watch) clearInterval(audio.watch);
+    audio.watch = setInterval(() => {
+      if (audio.ctx && audio.ctx.state !== 'running') audio.ctx.resume().catch(() => {});
+    }, 1000);
     down = new Downsampler(rate, RATE);
     up = new Upsampler(RATE, rate);
 
@@ -1363,6 +1370,7 @@ function stopAudio() {
   const ctx = audio.ctx;
   audio.ctx = null; audio.stream = null; audio.outGain = null;
   audio.micNode = null; audio.spkNode = null;
+  if (audio.watch) { clearInterval(audio.watch); audio.watch = 0; }
   // Received frames are dropped while `up` is null, so nothing queues in a
   // buffer with no one draining it; both are rebuilt by the next start.
   up = null; down = null;
