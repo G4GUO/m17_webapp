@@ -222,11 +222,25 @@ void pluto_tx_flush(void) {
 	}
 }
 
+// Set when the Pluto refused to hand over a streaming buffer.  iio_buffer_first(NULL, ...)
+// segfaults, so a wedged Pluto (its DMA buffers stuck after a client died mid-stream, which
+// only a power cycle clears) used to take the whole program down in a systemd restart loop
+// instead of reporting the reason.  park the flag and let pluto_open() fail properly.
+static bool m_buffer_error;
+
 void pluto_set_tx_buff_length(uint32_t len) {
 	(void)len;                              // the chunk size governs, not the caller's block
 	// Change the size of the buffer
 	if (m_txbuf) { iio_buffer_destroy(m_txbuf); m_txbuf = NULL; }
 	m_txbuf = iio_device_create_buffer( m_tx, TX_CHUNK_SAMPLES, false);
+	if (m_txbuf == NULL) {
+		fprintf(stderr, "m17web: the Pluto would not give a TX streaming buffer "
+		                "(its stream is stuck - power cycle the Pluto)\n");
+		fflush(stderr);
+		m_tx_buff_ptr = NULL;
+		m_buffer_error = true;
+		return;
+	}
 	m_tx_buff_ptr = (scmplx*)iio_buffer_first(m_txbuf, m_tx0_i);
 	memset(m_tx_buff_ptr, 0, sizeof(scmplx)*TX_CHUNK_SAMPLES);
 	m_tx_acc_n = 0;
@@ -236,6 +250,13 @@ void pluto_set_rx_buff_length(uint32_t len) {
 	// Change the size of the buffer
 	if (m_rxbuf) { iio_buffer_destroy(m_rxbuf); m_rxbuf = NULL; }
 	m_rxbuf = iio_device_create_buffer( m_rx, len, false);
+	if (m_rxbuf == NULL) {
+		fprintf(stderr, "m17web: the Pluto would not give an RX streaming buffer "
+		                "(its stream is stuck - power cycle the Pluto)\n");
+		fflush(stderr);
+		m_buffer_error = true;
+		return;
+	}
 	m_rx_buffer_samples = len;
 	iio_buffer_first(m_rxbuf, m_rx0_i);
 	scmplx *s_b = (scmplx*)iio_buffer_first(m_rxbuf, m_rx0_i);
@@ -354,6 +375,12 @@ int pluto_open( uint32_t block_size ){
 	iio_context_set_timeout(m_ctx, 2000);
 	pluto_set_tx_buff_length(block_size);
 	pluto_set_rx_buff_length(block_size);
+	if (m_buffer_error || m_txbuf == NULL || m_rxbuf == NULL) {
+		// Leave m_pluto_running false: radio_open() falls back to the simulator and
+		// the reason above stays on the console instead of a segfault in the journal.
+		m_pluto_running = false;
+		return -1;
+	}
 	iio_device_set_kernel_buffers_count(m_tx, 4);
 	iio_device_set_kernel_buffers_count(m_rx, 4);
 	// Enable manual GPIO
@@ -534,6 +561,7 @@ void pluto_agc_type(AgcType type){
 void pluto_tx_samples( scmplx *s, int len) {
 	if (m_pluto_running == false) return;
 	if (len <= 0) return;
+	if (m_txbuf == NULL || m_tx_buff_ptr == NULL) return;   // no buffer: the radio is not streaming
 	// Accumulate into whole 40 ms sub frames; see TX_CHUNK_SAMPLES above.
 	while (len > 0) {
 		int take = TX_CHUNK_SAMPLES - m_tx_acc_n;
@@ -558,6 +586,7 @@ void pluto_tx_samples( scmplx *s, int len) {
 //
 uint32_t pluto_rx_samples( scmplx *s ) {
 	if (m_pluto_running == false) return 0;
+	if (m_rxbuf == NULL) return 0;          // the buffer could not be re-made
 	// iio_buffer_refill() returns ssize_t and a *negative* error code when the
 	// link fails (the Pluto re-enumerating on USB, for instance).  Storing that
 	// in an unsigned int turned -1 into ~4 GB, and the memcpy below then ran off
