@@ -38,6 +38,7 @@ static long m_los_at;
 static long m_last_audio_ms;         // when decoded audio last arrived
 static long m_rec_start_ms;          // when the current file was opened
 #define MAILBOX_MAX_MS 30000         // longest single over we will record
+#define MAILBOX_STALE_S   60         // an unplayed reply older than this is dropped
 static char m_rec_final[300];        // the name the file gets once it is complete
 #define MAILBOX_HANG_MS 2000        // a brief loss of sync is a pause, not the end
 
@@ -117,6 +118,14 @@ void m17_mailbox_los(void) {
 // a loss of sync, and a backend that never reports signal start at all.
 void m17_mailbox_audio(const int16_t *s, int len) {
     if (!m_on || !m_inbox[0]) return;
+
+    // The assistant hears only while it is the selected speaker route.  The
+    // route is the operator's switch, and the socket path already honours it
+    // (webui_audio_to_browser hands receive audio to the client its route
+    // names); the mailbox used to ignore it and answer overs with the AI
+    // unselected, which is heard as an assistant talking over the operator.
+    // Nothing recorded means nothing to hand over, so no reply can be invented.
+    if (audio_get_route(true) != AROUTE_AI) return;
 
     // Only real audio counts.  Noise decoded by a squelched receiver arrives
     // continuously, and if that keeps resetting the hang the recording never
@@ -206,8 +215,26 @@ void m17_mailbox_service(void) {
         // set from signal start and cleared only after the hang time, so this
         // covers the whole over plus a pause.
         if (m_recording) return;
+        // The assistant speaks only while it is the selected microphone route -
+        // the same rule the socket path follows in the other direction.  A file
+        // in the outbox can no longer key the transmitter behind the operator's
+        // back; this is the half that produced the uninvited voice reply.
+        if (audio_get_route(false) != AROUTE_AI) return;
         char path[300];
         if (next_outbox_file(path, sizeof(path))) {
+            // A reply queued while the assistant was unselected is out of date
+            // by the time it is selected again: it answers an over nobody
+            // remembers.  Drop it rather than surprise the operator with it.
+            struct stat st;
+            if (stat(path, &st) == 0 && (long)time(NULL) - (long)st.st_mtime > MAILBOX_STALE_S) {
+                printf("mailbox: dropping stale reply %s\n", path);
+                fflush(stdout);
+                if (unlink(path) != 0) {
+                    printf("mailbox: could not remove stale %s\n", path);
+                    fflush(stdout);
+                }
+                return;
+            }
             audio_mic_file_set(path);
             snprintf(m_playing, sizeof(m_playing), "%s", path);
             m17_txrx_ptt_on();

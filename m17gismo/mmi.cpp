@@ -99,6 +99,19 @@ static void bt_sync_routes(void){
 	save_line_to_config("mic", line);
 }
 
+// A frequency in MHz, which is how an operator reads it and how the panel shows
+// it.  Integer arithmetic (whole MHz, then the remainder as six digits) so a
+// channel plan is never rounded by a float, and no Hz figure on the end: on a
+// phone that line has to fit.
+static void mmi_report_freq(const char *what, uint64_t hz) {
+	char line[64];
+	snprintf(line, sizeof line, "%s frequency: %llu.%06llu MHz",
+	         what,
+	         (unsigned long long)(hz / 1000000ULL),
+	         (unsigned long long)(hz % 1000000ULL));
+	gui_cmd_resp(line);
+}
+
 void mmi_parse(char *cmd){
 	int nt = 0;
 	bool valid = false;
@@ -116,19 +129,21 @@ void mmi_parse(char *cmd){
 	//   smslog            state and where it writes
 	//   smslog on|off     turn it on or off, kept for the next start
 	//   smslog file PATH  write somewhere else than sms.log
-	if(strncmp(cmd,"smslog",6)==0 && (cmd[6] == 0 || cmd[6] == ' ')){
+	// Handled before the tokeniser, so the case is folded here as well: a phone
+	// keyboard gives "Smslog on", and this branch used to miss it entirely.
+	if(strncasecmp(cmd,"smslog",6)==0 && (cmd[6] == 0 || cmd[6] == ' ')){
 		char line[320];
 		const char *p = cmd + 6;
 		while(*p == ' ') p++;
-		if(strncmp(p,"on",2)==0){
+		if(strncasecmp(p,"on",2)==0){
 			m17_sms_set_log(1);
 			save_line_to_config("smslog", "smslog on");
 			snprintf(line, sizeof line, "SMS log on: %s", m17_sms_log_path());
-		}else if(strncmp(p,"off",3)==0){
+		}else if(strncasecmp(p,"off",3)==0){
 			m17_sms_set_log(0);
 			save_line_to_config("smslog", "smslog off");
 			snprintf(line, sizeof line, "SMS log off");
-		}else if(strncmp(p,"file ",5)==0){
+		}else if(strncasecmp(p,"file ",5)==0){
 			m17_sms_set_log_path(p + 5);
 			snprintf(line, sizeof line, "smslog file %s", m17_sms_log_path());
 			save_line_to_config("smslog", line);
@@ -145,7 +160,7 @@ void mmi_parse(char *cmd){
 
 	// SMS takes the rest of the line verbatim, so it is handled before the
 	// tokeniser eats the spaces.  sms <text> sends; sms alone reports.
-	if(strncmp(cmd,"sms",3)==0 && (cmd[3] == 0 || cmd[3] == ' ')){
+	if(strncasecmp(cmd,"sms",3)==0 && (cmd[3] == 0 || cmd[3] == ' ')){
 		char        line[400];
 		const char *p = cmd + 3;
 		int         st;
@@ -193,6 +208,14 @@ void mmi_parse(char *cmd){
 		if( ++nt == 10 ) break;
 		token[nt] = strtok(NULL," ");
 	}
+
+	// The phone app's keyboard capitalises the first letter of whatever is
+	// typed - "Tx", "Audio apply ...", "Sa G4GUO" - and every command used to
+	// come back "Invalid command" because the keywords were matched case
+	// sensitively.  Fold the keyword only, never the arguments: token[1..] carry
+	// callsigns, routes, frequencies, paths and SMS text, and a callsign folded
+	// to lower case is a different station.
+	for(char *kw = token[0]; *kw; kw++) *kw = (char)tolower((unsigned char)*kw);
 
 	// Start of commands
 
@@ -327,12 +350,16 @@ void mmi_parse(char *cmd){
 		}
 	}
 
-	// Transmitter frequency
+	// Transmitter frequency.  On its own it reports: an operator who wants to
+	// know what the station is on should not have to type a number to find out.
 	if(strncmp(token[0],"tf",2)==0){
 		if(	nt == 2 ){
 			uint64_t freq = atoll(token[1]);
 			radio_set_tx_frequency(freq);
 			m17_db_set_tx_freq(freq);
+			valid = true;
+		}else if(nt == 1){
+			mmi_report_freq("tx", m17_get_db()->tx_freq);
 			valid = true;
 		}
 	}
@@ -343,6 +370,9 @@ void mmi_parse(char *cmd){
 			uint64_t freq = atoll(token[1]);
 			radio_set_rx_frequency(freq);
 			m17_db_set_rx_freq(freq);
+			valid = true;
+		}else if(nt == 1){
+			mmi_report_freq("rx", m17_get_db()->rx_freq);
 			valid = true;
 		}
 	}
@@ -407,8 +437,18 @@ void mmi_parse(char *cmd){
 
 	// Transmit
 	if(strncmp(token[0],"tx",2)==0){
-		m17_txrx_ptt_on();
-		valid = true;
+		// Nothing can feed a carrier that has no microphone.  With the route on
+		// mute the station would key and send silence, which is still a
+		// transmission - a page whose audio has been switched off must not be
+		// able to put one on air by a stray tap.  A deliberate unmodulated
+		// carrier is what "tc" is for.
+		if(audio_get_route(false) == AROUTE_MUTE){
+			gui_cmd_resp("transmit refused: the microphone route is mute (tc gives a bare carrier)");
+			valid = true;
+		}else{
+			m17_txrx_ptt_on();
+			valid = true;
+		}
 	}
 
 	// Duplex
@@ -584,7 +624,12 @@ void mmi_parse(char *cmd){
 	 * Nothing depends on a socket staying open. */
 	if(strncmp(token[0],"mailbox",7) == 0 && nt >= 2){
 		if(strcasecmp(token[1],"off") == 0){
+			// Keep it off across a restart: the line stayed in config.txt, so
+			// the station came back with the assistant live every time it was
+			// restarted - which is how it reappeared after being switched off.
+			int was_on = m17_mailbox_enabled();
 			m17_mailbox_set("", "");
+			if(was_on) save_line_to_config("mailbox", "mailbox off");
 			gui_cmd_resp("mailbox: off");
 		} else {
 			const char *out = (nt >= 3) ? token[2] : NULL;

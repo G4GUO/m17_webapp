@@ -15,6 +15,9 @@ let ws = null;
 let reconnectDelay = 500;
 let st = {};                       // last state message
 let audioReady = false;
+let audioOff = false;               // stopped on purpose, as opposed to never started
+let linkUp = false;                 // socket open - not the same as safe to key
+let visHook = false;                // the visibility listener is added once
 let txHeld = false;
 
 // ---------------------------------------------------------------------------
@@ -29,12 +32,14 @@ function connect() {
     reconnectDelay = 500;
     $('link').textContent = 'online';
     $('link').className = 'link on';
-    $('pttbtn').disabled = false;
+    linkUp = true;
+    paintPtt();                    // a live socket is not a licence to key: paintPtt decides
   };
   ws.onclose = () => {
     $('link').textContent = 'offline';
     $('link').className = 'link off';
-    $('pttbtn').disabled = true;
+    linkUp = false;
+    paintPtt();
     setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 8000);
   };
@@ -259,7 +264,10 @@ function renderAudio(s) {
       }
     }
     if (spk === 'browser' || mic === 'browser') {
-      if (!audioReady) { txt += ' - browser audio not enabled yet'; col = 'var(--amber)'; }
+      if (!audioReady) {
+        txt += audioOff ? ' - browser audio is off' : ' - browser audio not enabled yet';
+        col = 'var(--amber)';
+      }
     }
   }
   if (s.audio_pending) txt += ' (applying\u2026)';
@@ -273,8 +281,8 @@ function renderAudio(s) {
   el.style.color = col;
 
   if (!cfgOpen) setRoutes(spk, mic);
-  const en = $('audioenable');
-  if (en) en.disabled = audioReady;
+  paintAudioButton();
+  paintPtt();
 }
 
 // The sound card's own hardware controls.  The names come from the card, so the
@@ -724,14 +732,32 @@ function wire() {
   const btn = $('pttbtn');
   const down = (e) => {
     e.preventDefault();
+    if (btn.disabled) return;          // no microphone to feed a carrier; the station would refuse it too
+    // A finger that slides off the key is still holding it.  Capture the pointer so
+    // every move and the release come back to this button however far it drifts,
+    // which is what stopped a long over as soon as the thumb touched the edge.
+    try { btn.setPointerCapture(e.pointerId); } catch (err) { /* older browser */ }
+    // A suspended context fires no callbacks, so the station hears nothing and its
+    // watchdog drops the carrier after a few seconds - "transmit comes on, then goes
+    // off".  iOS suspends for a screen lock, a call, or an audio route change, and a
+    // press is the only moment it will let the context start again.
+    if (audio.ctx && audio.ctx.state !== 'running') {
+      const why = audio.ctx.state;
+      addLog('info', 'audio context was ' + why + ' - resuming for this press');
+      audio.ctx.resume().then(() => addLog('info', 'audio context: ' + audio.ctx.state))
+        .catch(() => addLog('err', 'audio context would not resume (still ' + audio.ctx.state + ') - the station will drop the carrier'));
+    }
     if (!txHeld) { txHeld = true; btn.classList.add('live'); cmd('tx'); setSpkMute(); }
   };
   const up = (e) => {
     if (txHeld) { txHeld = false; btn.classList.remove('live'); cmd('rx'); flushMic(); setSpkMute(); }
+    try { if (btn.hasPointerCapture && btn.hasPointerCapture(e.pointerId)) btn.releasePointerCapture(e.pointerId); } catch (err) { /* already gone */ }
   };
   btn.addEventListener('pointerdown', down);
   btn.addEventListener('pointerup', up);
-  btn.addEventListener('pointerleave', up);
+  // Only a real release unkeys.  With the capture above this never fires while the
+  // finger is down; the buttons check covers a browser that ignores setPointerCapture.
+  btn.addEventListener('pointerleave', (e) => { if (!e.buttons) up(e); });
   btn.addEventListener('pointercancel', up);
   window.addEventListener('keydown', (e) => {
     if (e.code === 'Space' && !e.repeat && !isTyping(e.target)) down(e);
@@ -917,7 +943,10 @@ function wire() {
     e.target.value = v - (v % 2);          // whole sub frames only
     cmd('lead ' + e.target.value);
   };
-  $('audioenable').onclick = () => startAudio();
+  // One button, two directions: it is the only way to stop the browser listening,
+  // and pressing it again picks the microphone back up.
+  $('audioenable').onclick = () => (audioReady ? stopAudio() : startAudio());
+  paintAudioButton();
 
   cmd('refs');
 }
@@ -1232,7 +1261,31 @@ async function startAudio() {
     // be able to stall the set-up: the nodes below work while suspended, and a
     // later gesture resumes the context.
     await Promise.race([audio.ctx.resume().catch(() => {}), sleep(1500)]);
+    // Say so when the context stops: silence from the client is what makes the
+    // station drop a carrier, and a suspended context is the usual reason on iOS.
+    audio.ctx.onstatechange = (ev) => {
+      const s = (ev && ev.target ? ev.target : audio.ctx);
+      if (!s) return;
+      addLog(s.state === 'running' ? 'info' : 'err', 'audio context: ' + s.state);
+    };
+    // Returning to the page is a chance to restart it: iOS leaves the context
+    // suspended after the screen was locked, and a page in the background sends
+    // no microphone audio at all.  Added once, however many times audio is started.
+    if (!visHook) {
+      visHook = true;
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && audio.ctx && audio.ctx.state !== 'running')
+          audio.ctx.resume().catch(() => {});
+      });
+    }
     const rate = audio.ctx.sampleRate;
+    // Keep it awake.  A suspended context silences received audio and stops the
+    // microphone frames, and iOS will not resume it without a nudge, so nudge it.
+    // Noise while running; the pair of them is cleared when the page switches off.
+    if (audio.watch) clearInterval(audio.watch);
+    audio.watch = setInterval(() => {
+      if (audio.ctx && audio.ctx.state !== 'running') audio.ctx.resume().catch(() => {});
+    }, 1000);
     down = new Downsampler(rate, RATE);
     up = new Upsampler(RATE, rate);
 
@@ -1276,8 +1329,20 @@ async function startAudio() {
     audio.spkNode.connect(audio.outGain);
 
     audioReady = true;
-    $('audioenable').disabled = true;
+    audioOff = false;
+    paintAudioButton();
+    paintPtt();
     $('audioerr').textContent = '';
+    // If a channel is routed nowhere, take it: we muted it when this page last
+    // switched off, or it was already mute, and the button would look broken.  A
+    // channel on a real device (card, Bluetooth, the phone app, the assistant) is
+    // left alone - the dialog is where that changes - but a half-mute state heals
+    // too, which is what "the audio keeps defaulting to mute" looked like.
+    const spk = st.spk_route || '', mic = st.mic_route || '';
+    if (spk === 'mute' || mic === 'mute') {
+      cmd('audio apply spk ' + (spk === 'mute' ? 'browser' : spk) +
+          ' mic ' + (mic === 'mute' ? 'browser' : mic));
+    }
     // Name the device the browser actually opened: "far too loud at any trim"
     // is usually the laptop's own array rather than the one that was expected.
     const track = audio.stream.getAudioTracks ? audio.stream.getAudioTracks()[0] : null;
@@ -1295,6 +1360,96 @@ async function startAudio() {
 
 let micFlush = [];
 function flushMic() { micFlush = []; }
+
+// ---------------------------------------------------------------------------
+// Turning browser audio off again.  The page keeps its socket, its panel and its
+// state; only the local audio goes away, so the button can bring it back without
+// a reload.  The capture track is stopped first and explicitly, which is what
+// puts the browser's microphone indicator out - dropping the node alone leaves
+// it lit and looks like the page is still listening.
+function stopAudio() {
+  if (!audioReady && !audio.ctx) return false;
+  pttReleaseNow();                       // never leave the station keyed by a page that stops listening
+  try { if (audio.micNode) { audio.micNode.onaudioprocess = null; audio.micNode.disconnect(); } } catch (e) { /* already gone */ }
+  try { if (audio.spkNode) { audio.spkNode.onaudioprocess = null; audio.spkNode.disconnect(); } } catch (e) { /* already gone */ }
+  try { if (audio.outGain) audio.outGain.disconnect(); } catch (e) { /* already gone */ }
+  try { if (audio.stream) audio.stream.getTracks().forEach((t) => t.stop()); } catch (e) { /* no stream */ }
+  const ctx = audio.ctx;
+  audio.ctx = null; audio.stream = null; audio.outGain = null;
+  audio.micNode = null; audio.spkNode = null;
+  if (audio.watch) { clearInterval(audio.watch); audio.watch = 0; }
+  // Received frames are dropped while `up` is null, so nothing queues in a
+  // buffer with no one draining it; both are rebuilt by the next start.
+  up = null; down = null;
+  audioReady = false;
+  audioOff = true;
+  if (ctx) { try { ctx.close(); } catch (e) { /* already closed */ } }
+  paintAudioButton();
+  paintPtt();
+  // A page that is not listening must not be able to put anything on air: hand
+  // both routes to mute, where the station has no microphone to send and refuses
+  // "tx" outright.  This is what makes a phone in a pocket safe - the key is dead
+  // rather than dangerous.  The routes are remembered in config.txt, so the
+  // station also comes back muted after a restart rather than unexpectedly live.
+  if (st.spk_route === 'browser' || st.mic_route === 'browser') {
+    cmd('audio apply spk mute mic mute');
+  }
+  addLog('info', 'browser audio off: microphone released, received audio no longer played');
+  return true;
+}
+
+// The one place that decides what the audio button says and looks like, so the
+// state stream and the two paths above cannot disagree with each other.
+function paintAudioButton() {
+  const b = $('audioenable');
+  if (!b) return;
+  b.disabled = false;                    // needed while running: it is the off switch
+  b.textContent = audioReady ? 'disable browser audio' : 'enable browser audio';
+  b.classList.toggle('on', audioReady);
+  b.title = audioReady
+    ? 'Release the microphone and stop playing the received audio'
+    : 'Ask the browser for the microphone and play the received audio';
+}
+
+// With nothing able to feed the microphone the key only sends silence, so it is
+// dead rather than dangerous.  That covers a route of mute, and - the case that
+// matters on a phone - the browser route before this page has enabled its audio:
+// a fresh page otherwise keyed the station from a single stray tap.  Any other
+// route belongs to something that really is feeding the station (the phone app,
+// the sound card, Bluetooth, the assistant), so the page may key those.
+function paintPtt() {
+  const b = $('pttbtn');
+  if (!b) return;
+  const route = st.mic_route || '';
+  const dead = !linkUp || route === '' || route === 'mute' || (route === 'browser' && !audioReady);
+  b.disabled = dead;
+  // A phone has no hover, so the reason goes in the button's own hint line, where
+  // a dead PTT cannot read as a broken page.
+  const hint = b.querySelector('.hint');
+  if (hint) {
+    hint.textContent = !dead ? '(or hold space)'
+      : !linkUp ? '(offline)'
+      : route === '' ? '(waiting for the station)'
+      : route === 'browser' ? '(browser audio is off)'
+      : '(no microphone)';
+  }
+  b.title = !dead ? ''
+    : route === 'browser'
+      ? 'Browser audio is off, so there is no microphone to transmit - press "enable browser audio" first.'
+      : 'No microphone can feed the transmitter (the route is ' + (route || 'unknown') + '), so the station would send silence.';
+}
+
+// Release the transmitter from outside the PTT handlers: the same things the
+// pointerup path does, gathered here so a later caller cannot forget one of them.
+function pttReleaseNow() {
+  if (!txHeld) return;
+  txHeld = false;
+  const btn = $('pttbtn');
+  if (btn) btn.classList.remove('live');
+  cmd('rx');
+  flushMic();
+  setSpkMute();
+}
 
 function handleBinary(u8) {
   if (u8.length < 3 || u8[0] !== TAG_SPK) return;

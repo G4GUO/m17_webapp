@@ -6,7 +6,9 @@
 
 static const char *const help_lines[] = {
 	"rf nnnnnnnnn    set receive frequency in Hz",
+	"rf              report the receive frequency",
 	"tf nnnnnnnnn    set transmit frequency in Hz",
+	"tf              report the transmit frequency",
 	"rg 0.0 - 1.0    receive gain",
 	"tg 0.0 - 1.0    transmit gain",
 	"fc 0.9 - 1.1    frequency correction factor",

@@ -18,6 +18,9 @@
 body {
   margin: 0; background: var(--bg); color: var(--fg);
   font: .95rem/1.38 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* iOS inflates text on its own in landscape and after a zoom, which changes the
+     layout width under the operator; ask for the size we actually set. */
+  -webkit-text-size-adjust: 100%; text-size-adjust: 100%;
 }
 header {
   display: flex; align-items: center; gap: .9rem;
@@ -97,17 +100,25 @@ main { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5r
 .col.wide { grid-column: auto; grid-template-columns: minmax(0, 1fr); }
 .col > .span2 { grid-column: 1 / -1; }
 @media (max-width: 1000px) { main { grid-template-columns: minmax(0, 1fr); } .col { grid-column: auto; } }
-@media (max-width: 760px) { .col { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) {
+  .col { grid-template-columns: minmax(0, 1fr); }
+}
 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: .6rem; padding: .34rem .5rem; }
 .card h2 { margin: 0 0 .2rem; font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; color: var(--dim); }
 .row { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; margin-top: .26rem; }
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: .26rem .6rem; }
+/* minmax(0, 1fr), not 1fr: a grid column's automatic minimum is its content's
+   intrinsic width, and a text input's is wide (size=20, about 224 px), so two
+   plain 1fr columns forced the card 87 px wider than a phone's screen and the page
+   could be panned sideways. */
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .26rem .6rem; }
 label { display: flex; flex-direction: column; gap: .06rem; font-size: .73rem; color: var(--dim); }
 label.chk { flex-direction: row; align-items: center; gap: .3rem; color: var(--fg); font-size: .8rem; }
 input, select, button {
   background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
   border-radius: .35rem; padding: .19rem .4rem; font: inherit; font-size: .8rem;
+  /* A field may not push its container wider than the screen on its own account. */
+  min-width: 0; max-width: 100%;
 }
 input[type=range] { padding: 0; }
 input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 0; }
@@ -115,6 +126,20 @@ button { cursor: pointer; }
 button:hover { border-color: var(--accent); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 button.mini { font-size: .76rem; padding: .18rem .45rem; }
+/* Browser audio running: this button is now the off switch, so it has to read as
+   a state rather than as something still waiting to be pressed. */
+button.mini.on { border-color: var(--green); color: var(--green); }
+
+/* Touch: iOS Safari starts a text selection - with the magnifier loupe and the
+   Copy/Look Up menu - when a press on a button lasts more than about half a
+   second.  On a hold-to-talk button that is every transmission, and the system
+   gesture takes the pointer stream away, so the carrier drops.  A button label
+   is not text anyone wants to select, so opt every button out; the property has
+   to sit on the button itself, and user-select on a container is not enough. */
+button, [role="button"] {
+  -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none;
+}
 
 /* The receive and transmit controls stack, with short sliders: side by side in a
    wide card, the gain sliders stretch across the whole card. */
@@ -153,10 +178,21 @@ button.mini { font-size: .76rem; padding: .18rem .45rem; }
 .ptt-button {
   padding: .5rem; font-size: 1.05rem; font-weight: 700; letter-spacing: .04em;
   background: linear-gradient(180deg, #2a3a4d, #1d2833); border: 1px solid var(--line);
+  /* A thumb holding this down for a minute must not slide off the edge, and a
+     slide must not be read as a scroll: give it real height and keep the touch
+     for the button. */
+  min-height: 4.6rem; width: 100%;
+  touch-action: none; -webkit-tap-highlight-color: transparent;
 }
 .ptt-button .hint { display: block; font-size: .7rem; font-weight: 400; color: var(--dim); }
 .ptt-button.live { background: linear-gradient(180deg, #a02828, #771d1d); border-color: var(--red); color: #fff; }
 .ptt-button:disabled { filter: grayscale(.6); }
+/* Thumb territory: a taller key, so a finger that drifts still holds it.  This
+   has to sit after the rule above - a media query adds no specificity, so an
+   earlier one loses to the later base rule. */
+@media (max-width: 760px) {
+  .ptt-button { min-height: 7rem; font-size: 1.15rem; }
+}
 
 /* Bluetooth audio dialog */
 #btdlg, #audiodlg {
@@ -289,3 +325,18 @@ p:empty, span.lbl:empty, .note:empty { display: none; }
 .dialcap { position: absolute; top: 47px; left: 0; right: 0; text-align: center;
            font-size: .66rem; color: #9fb0bf; text-transform: uppercase; letter-spacing: .09em;
            pointer-events: none; }
+
+/* Phones.  Two things here, both about the page not moving under the operator.
+   A focused field whose text is under 16 px makes iOS Safari zoom the whole page -
+   the classic "the keyboard opened and the send button is off the screen", fixed
+   afterwards with a two-finger pinch.  16 px stops the zoom.  And a field that can
+   grow must be allowed to shrink (min-width: 0), otherwise its intrinsic width
+   pushes the button beside it out of the row.  The block sits at the end of the
+   file so it wins: @media adds no specificity, only position. */
+@media (max-width: 760px) {
+  input, select, textarea, #cmdform input, #smsinput { font-size: 16px; }
+  #smsinput, #cmdform input { flex: 1 1 6rem; min-width: 0; }
+  #smsinput + button, #cmdform button { flex: 0 0 auto; }
+  /* The two dialogs ask for 32rem, which is wider than a phone: let them fit. */
+  #btdlg, #audiodlg { min-width: 0; width: min(94vw, 32rem); }
+}
