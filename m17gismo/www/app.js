@@ -1319,12 +1319,15 @@ async function startAudio() {
     paintAudioButton();
     paintPtt();
     $('audioerr').textContent = '';
-    // If the station is routed nowhere - we muted it when this page last switched
-    // off, or it was already mute - take the audio, or the button looks broken.
-    // Any other route belongs to someone else (card, Bluetooth, the phone app,
-    // the assistant) and is left alone; the dialog is where that is changed.
-    if ((st.spk_route || '') === 'mute' && (st.mic_route || '') === 'mute') {
-      cmd('audio apply spk browser mic browser');
+    // If a channel is routed nowhere, take it: we muted it when this page last
+    // switched off, or it was already mute, and the button would look broken.  A
+    // channel on a real device (card, Bluetooth, the phone app, the assistant) is
+    // left alone - the dialog is where that changes - but a half-mute state heals
+    // too, which is what "the audio keeps defaulting to mute" looked like.
+    const spk = st.spk_route || '', mic = st.mic_route || '';
+    if (spk === 'mute' || mic === 'mute') {
+      cmd('audio apply spk ' + (spk === 'mute' ? 'browser' : spk) +
+          ' mic ' + (mic === 'mute' ? 'browser' : mic));
     }
     // Name the device the browser actually opened: "far too loud at any trim"
     // is usually the laptop's own array rather than the one that was expected.
