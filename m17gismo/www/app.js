@@ -278,6 +278,7 @@ function renderAudio(s) {
 
   if (!cfgOpen) setRoutes(spk, mic);
   paintAudioButton();
+  paintPtt();
 }
 
 // The sound card's own hardware controls.  The names come from the card, so the
@@ -727,6 +728,7 @@ function wire() {
   const btn = $('pttbtn');
   const down = (e) => {
     e.preventDefault();
+    if (btn.disabled) return;          // no microphone to feed a carrier; the station would refuse it too
     if (!txHeld) { txHeld = true; btn.classList.add('live'); cmd('tx'); setSpkMute(); }
   };
   const up = (e) => {
@@ -1284,7 +1286,15 @@ async function startAudio() {
     audioReady = true;
     audioOff = false;
     paintAudioButton();
+    paintPtt();
     $('audioerr').textContent = '';
+    // If the station is routed nowhere - we muted it when this page last switched
+    // off, or it was already mute - take the audio, or the button looks broken.
+    // Any other route belongs to someone else (card, Bluetooth, the phone app,
+    // the assistant) and is left alone; the dialog is where that is changed.
+    if ((st.spk_route || '') === 'mute' && (st.mic_route || '') === 'mute') {
+      cmd('audio apply spk browser mic browser');
+    }
     // Name the device the browser actually opened: "far too loud at any trim"
     // is usually the laptop's own array rather than the one that was expected.
     const track = audio.stream.getAudioTracks ? audio.stream.getAudioTracks()[0] : null;
@@ -1326,6 +1336,15 @@ function stopAudio() {
   audioOff = true;
   if (ctx) { try { ctx.close(); } catch (e) { /* already closed */ } }
   paintAudioButton();
+  paintPtt();
+  // A page that is not listening must not be able to put anything on air: hand
+  // both routes to mute, where the station has no microphone to send and refuses
+  // "tx" outright.  This is what makes a phone in a pocket safe - the key is dead
+  // rather than dangerous.  The routes are remembered in config.txt, so the
+  // station also comes back muted after a restart rather than unexpectedly live.
+  if (st.spk_route === 'browser' || st.mic_route === 'browser') {
+    cmd('audio apply spk mute mic mute');
+  }
   addLog('info', 'browser audio off: microphone released, received audio no longer played');
   return true;
 }
@@ -1341,6 +1360,19 @@ function paintAudioButton() {
   b.title = audioReady
     ? 'Release the microphone and stop playing the received audio'
     : 'Ask the browser for the microphone and play the received audio';
+}
+
+// With the microphone routed to mute nothing can feed a carrier, and the station
+// refuses "tx" - so the key is dead rather than dangerous.  Say so on the button
+// instead of letting it look broken.
+function paintPtt() {
+  const b = $('pttbtn');
+  if (!b) return;
+  const dead = (st.mic_route || '') === 'mute';
+  b.disabled = dead;
+  b.title = dead
+    ? 'No microphone is selected - the station would transmit silence. Press "enable browser audio" (or set a route in Audio configuration).'
+    : '';
 }
 
 // Release the transmitter from outside the PTT handlers: the same things the

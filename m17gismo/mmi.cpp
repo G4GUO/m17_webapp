@@ -417,8 +417,18 @@ void mmi_parse(char *cmd){
 
 	// Transmit
 	if(strncmp(token[0],"tx",2)==0){
-		m17_txrx_ptt_on();
-		valid = true;
+		// Nothing can feed a carrier that has no microphone.  With the route on
+		// mute the station would key and send silence, which is still a
+		// transmission - a page whose audio has been switched off must not be
+		// able to put one on air by a stray tap.  A deliberate unmodulated
+		// carrier is what "tc" is for.
+		if(audio_get_route(false) == AROUTE_MUTE){
+			gui_cmd_resp("transmit refused: the microphone route is mute (tc gives a bare carrier)");
+			valid = true;
+		}else{
+			m17_txrx_ptt_on();
+			valid = true;
+		}
 	}
 
 	// Duplex
