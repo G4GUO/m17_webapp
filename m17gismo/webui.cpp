@@ -198,8 +198,10 @@ static void build_state(char *out, int len) {
     for (int i = 0; mode[i]; i++)
         if (mode[i] == '\n' || mode[i] == '\r' || mode[i] == '\t') mode[i] = ' ';
 
+    // The plain name: the panel prints "name-module" itself, and the padded
+    // console form made that read "M17-M17 C-C".
     char ref[16] = "";
-    m17_net_ref_address(ref);
+    m17_net_ref_name(ref);
 
     // The reflector module is only set once connected; %c of a NUL byte would
     // make the JSON unparseable.

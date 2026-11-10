@@ -27,6 +27,13 @@
 
 static uint8_t m_tx_buf[54];
 static bool m_ref_active;
+// When the reflector last said anything at all.  m_ref_active used to come back
+// false only on a DISC frame, so a reflector that restarted, or a route that
+// went away, left the panel showing "connected to ..." for a link that was dead
+// - which is how a station with no link came to claim one.  A live link pings
+// every few seconds, so silence is the signal.
+static uint32_t m_ref_rx_ms;
+#define REF_LINK_SILENT_MS 30000
 static bool m_udp_running;
 static pthread_t m_tid[1];
 static uint48_t m_from;
@@ -285,6 +292,9 @@ void m17_parse_m17_data(uint8_t *b){
 void m17_net_parse_msg(uint8_t *b, int len){
 	const char *m = (const char *)b;
 	if(len < 4 ) return;
+	// Anything at all from the far end means the link is up: PING, PONG, a
+	// stream frame, or the answer to our own connect.
+	if(m_ref_active) m_ref_rx_ms = net_now_ms();
 
     if(strncmp(m,"CONN",4) == 0){
         //printf("FM Ref: CONN\n");
@@ -294,12 +304,22 @@ void m17_net_parse_msg(uint8_t *b, int len){
     if(strncmp(m,"ACKN",4) == 0){
         //printf("FM Ref: ACKN\n");
         m_ref_active = true;
+        m_ref_rx_ms = net_now_ms();
     	buff_rel(b);
     	gui_update();
         return;
     }
     if(strncmp(m,"NACK",4) == 0){
         //printf("FM Ref: NACK\n");
+        // Refused: usually a module nobody is on, or the callsign already
+        // linked.  Either way there is no link, so say so instead of leaving
+        // the previous connection on display.
+        if(m_ref_active){
+            m_ref_active = false;
+            m_ref_rx_ms = 0;
+            gui_cmd_resp("the reflector refused the connection");
+            gui_update();
+        }
     	buff_rel(b);
     	return;
     }
@@ -327,6 +347,7 @@ void m17_net_parse_msg(uint8_t *b, int len){
             udp_send(b, n);
         }
         m_ref_active = false;
+        m_ref_rx_ms = 0;
     	gui_update();
     	buff_rel(b);
 		return;
@@ -353,6 +374,17 @@ void *udp_thread( void *arg){
 	            // Timeout (nobody is talking) or an error: the buffer has to go
 	            // back, or the pool runs dry, and then the silence is noticed.
 	            buff_rel(bp);
+	            // Silence from a reflector we believe we are linked to.  Its keepalive
+	            // is a few seconds apart, so thirty seconds of nothing means the link
+	            // is gone even though no DISC ever arrived.
+	            if(m_ref_active && m_ref_rx_ms && (net_now_ms() - m_ref_rx_ms) > REF_LINK_SILENT_MS){
+	                m_ref_active = false;
+	                m_ref_rx_ms = 0;
+	                printf("m17web: reflector silent for %d ms, link marked down\n", REF_LINK_SILENT_MS);
+	                fflush(stdout);
+	                gui_cmd_resp("the reflector stopped answering - link down");
+	                gui_update();
+	            }
 	            if(m17_db_get_chan_type() == ASTODN && m17_db_in_frame() && m_net_rx_ms &&
 	               (net_now_ms() - m_net_rx_ms) > 1200){
 	                m_net_rx_ms = 0;
@@ -419,6 +451,10 @@ void m17_net_connect_to_reflector(const char *name, uint48_t fm, const char mod)
 	    //
 	    uint8_t tx_buffer[512];
 	    int n;
+	    // Until the reflector answers there is no link - do not keep showing the
+	    // last one while this attempt is in flight.
+	    m_ref_active = false;
+	    m_ref_rx_ms = 0;
 	    n = net_fmt_conn(tx_buffer, m_from, mod);
 	    n = udp_send(tx_buffer, n );
 
@@ -451,6 +487,12 @@ bool m17_net_connected(void){
 }
 void m17_net_ref_address(char *name){
 	sprintf(name,"%11s %c",m_name,m_mod);
+}
+// The plain reflector name, for interfaces that print the module themselves.
+// The padded form above is laid out for the console's fixed columns, and the
+// browser was appending its own module to it: "M17-M17 C-C".
+void m17_net_ref_name(char *name){
+	sprintf(name,"%s",m_name);
 }
 int m17_net_open(void)
 {

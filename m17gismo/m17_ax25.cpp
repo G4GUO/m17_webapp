@@ -78,12 +78,25 @@ static int             m_loopback;
 static unsigned        m_port = 8001;
 static char            m_call[M17_MAX_TEXT + 1];
 
+/* Every attached host application is handed a copy of everything heard, and any
+ * of them may transmit: one radio, many hosts, the way a hardware TNC's KISS
+ * port behaves.  Each host needs its own decoder, because a frame can arrive
+ * split across reads and the decoder holds the partial state between them. */
+#define AX25_MAX_HOSTS 8
+
+typedef struct {
+    int          fd;
+    kiss_decoder dec;
+    uint8_t      decbuf[1024];
+} ax25_host;
+
 static int             m_listen = -1;
-static int             m_client = -1;
+static ax25_host       m_hosts[AX25_MAX_HOSTS];
 static pthread_t       m_thread;
 static volatile int    m_run;
-static kiss_decoder    m_dec;
-static uint8_t         m_decbuf[1024];
+/* Guards the host slots.  kiss_write() runs on the radio thread and reads them
+ * while the KISS thread adds and removes them. */
+static pthread_mutex_t m_hosts_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static m17_bridge      m_bridge;
 static pthread_mutex_t m_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -117,24 +130,29 @@ static void kiss_write(const uint8_t *frame, size_t len)
 {
     uint8_t wire[1200];
     size_t  n;
-
-    if (m_client < 0)
-        return;
+    int     i;
 
     n = kiss_encode(0, 0, frame, len, wire, sizeof wire);
     if (n == 0)
         return;
 
-    size_t off = 0;
-    while (off < n) {
-        ssize_t w = send(m_client, wire + off, n - off, MSG_NOSIGNAL);
-        if (w > 0)
-            off += (size_t)w;
-        else if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
-            return; /* a busy host: drop rather than block the receiver */
-        else
-            return;
+    pthread_mutex_lock(&m_hosts_lock);
+    for (i = 0; i < AX25_MAX_HOSTS; i++) {
+        size_t off = 0;
+
+        if (m_hosts[i].fd < 0)
+            continue;
+
+        while (off < n) {
+            ssize_t w = send(m_hosts[i].fd, wire + off, n - off, MSG_NOSIGNAL);
+            if (w > 0)
+                off += (size_t)w;
+            else
+                break; /* a busy or gone host: drop rather than block the
+                        * receiver, and let the KISS thread reap it */
+        }
     }
+    pthread_mutex_unlock(&m_hosts_lock);
 }
 
 /* --------------------------------------------------------------- framing */
@@ -160,12 +178,35 @@ static void on_kiss_frame(void *ctx, const kiss_frame *frame, const uint8_t *dat
         m_rejected++;
 }
 
-static void close_client(void)
+/* Caller holds m_hosts_lock. */
+static void host_close(int slot)
 {
-    if (m_client >= 0) {
-        close(m_client);
-        m_client = -1;
+    if (m_hosts[slot].fd >= 0) {
+        close(m_hosts[slot].fd);
+        m_hosts[slot].fd = -1;
     }
+}
+
+static void hosts_close_all(void)
+{
+    int i;
+
+    pthread_mutex_lock(&m_hosts_lock);
+    for (i = 0; i < AX25_MAX_HOSTS; i++)
+        host_close(i);
+    pthread_mutex_unlock(&m_hosts_lock);
+}
+
+static int hosts_attached(void)
+{
+    int i, n = 0;
+
+    pthread_mutex_lock(&m_hosts_lock);
+    for (i = 0; i < AX25_MAX_HOSTS; i++)
+        if (m_hosts[i].fd >= 0)
+            n++;
+    pthread_mutex_unlock(&m_hosts_lock);
+    return n;
 }
 
 static void *kiss_thread(void *arg)
@@ -173,21 +214,29 @@ static void *kiss_thread(void *arg)
     (void)arg;
 
     while (m_run) {
-        struct pollfd pfd[2];
+        struct pollfd pfd[1 + AX25_MAX_HOSTS];
+        int           slot_of[1 + AX25_MAX_HOSTS];
         int           n = 0;
+        int           i;
 
         if (m_listen < 0)
             break;
 
         pfd[n].fd = m_listen;
         pfd[n].events = POLLIN;
+        slot_of[n] = -1;
         n++;
 
-        if (m_client >= 0) {
-            pfd[n].fd = m_client;
-            pfd[n].events = POLLIN;
-            n++;
+        pthread_mutex_lock(&m_hosts_lock);
+        for (i = 0; i < AX25_MAX_HOSTS; i++) {
+            if (m_hosts[i].fd >= 0) {
+                pfd[n].fd = m_hosts[i].fd;
+                pfd[n].events = POLLIN;
+                slot_of[n] = i;
+                n++;
+            }
         }
+        pthread_mutex_unlock(&m_hosts_lock);
 
         int rc = poll(pfd, (nfds_t)n, 100);
         if (rc < 0) {
@@ -201,26 +250,55 @@ static void *kiss_thread(void *arg)
         if (pfd[0].revents & POLLIN) {
             int fd = accept(m_listen, NULL, NULL);
             if (fd >= 0) {
-                if (m_client >= 0)
-                    close(m_client); /* one host at a time */
+                int slot = -1;
+
                 set_nonblock(fd);
-                m_client = fd;
-                kiss_decoder_init(&m_dec, m_decbuf, sizeof m_decbuf);
-                printf("m17web: AX.25 KISS host connected\n");
+
+                pthread_mutex_lock(&m_hosts_lock);
+                for (i = 0; i < AX25_MAX_HOSTS; i++) {
+                    if (m_hosts[i].fd < 0) {
+                        m_hosts[i].fd = fd;
+                        kiss_decoder_init(&m_hosts[i].dec, m_hosts[i].decbuf,
+                                          sizeof m_hosts[i].decbuf);
+                        slot = i;
+                        break;
+                    }
+                }
+                pthread_mutex_unlock(&m_hosts_lock);
+
+                if (slot < 0) {
+                    close(fd);      /* no free slot: refuse, never evict */
+                    printf("m17web: AX.25 KISS refused a host, %d already attached\n",
+                           AX25_MAX_HOSTS);
+                } else {
+                    printf("m17web: AX.25 KISS host %d connected (%d attached)\n",
+                           slot, hosts_attached());
+                }
                 fflush(stdout);
             }
         }
 
-        if (n > 1 && (pfd[1].revents & (POLLIN | POLLHUP | POLLERR))) {
+        /* Only this thread closes host sockets, so recv() needs no lock; the
+         * fd cannot be recycled underneath it. */
+        for (i = 1; i < n; i++) {
+            int     slot = slot_of[i];
             uint8_t chunk[256];
-            ssize_t r = recv(m_client, chunk, sizeof chunk, 0);
+            ssize_t r;
 
+            if (slot < 0 || !(pfd[i].revents & (POLLIN | POLLHUP | POLLERR)))
+                continue;
+
+            r = recv(m_hosts[slot].fd, chunk, sizeof chunk, 0);
             if (r > 0) {
-                kiss_decoder_push(&m_dec, chunk, (size_t)r, on_kiss_frame, NULL);
+                kiss_decoder_push(&m_hosts[slot].dec, chunk, (size_t)r,
+                                  on_kiss_frame, NULL);
             } else if (r == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
-                printf("m17web: AX.25 KISS host disconnected\n");
+                pthread_mutex_lock(&m_hosts_lock);
+                host_close(slot);
+                pthread_mutex_unlock(&m_hosts_lock);
+                printf("m17web: AX.25 KISS host %d disconnected (%d attached)\n",
+                       slot, hosts_attached());
                 fflush(stdout);
-                close_client();
             }
         }
     }
@@ -246,7 +324,8 @@ static int open_listener(unsigned port)
     sa.sin_addr.s_addr = htonl(INADDR_ANY);
     sa.sin_port        = htons((uint16_t)port);
 
-    if (bind(fd, (struct sockaddr *)&sa, sizeof sa) < 0 || listen(fd, 2) < 0) {
+    if (bind(fd, (struct sockaddr *)&sa, sizeof sa) < 0 ||
+        listen(fd, AX25_MAX_HOSTS) < 0) {
         close(fd);
         return -1;
     }
@@ -257,6 +336,14 @@ static int open_listener(unsigned port)
 void m17_ax25_init(void)
 {
     m17_bridge_config cfg;
+    int               i;
+
+    /* fd 0 is stdin, so the slots have to be marked free explicitly. */
+    for (i = 0; i < AX25_MAX_HOSTS; i++) {
+        m_hosts[i].fd = -1;
+        kiss_decoder_init(&m_hosts[i].dec, m_hosts[i].decbuf,
+                          sizeof m_hosts[i].decbuf);
+    }
 
     m17_bridge_config_default(&cfg);
     cfg.queue_depth = 4;
@@ -283,8 +370,7 @@ void m17_ax25_set_enabled(int on)
             return;
         }
         m_listen = fd;
-        m_client = -1;
-        kiss_decoder_init(&m_dec, m_decbuf, sizeof m_decbuf);
+        hosts_close_all();
         m_run = 1;
         if (pthread_create(&m_thread, NULL, kiss_thread, NULL) != 0) {
             m_run = 0;
@@ -302,7 +388,7 @@ void m17_ax25_set_enabled(int on)
             close(m_listen);      /* wakes poll() out of its wait */
         pthread_join(m_thread, NULL);
         m_listen = -1;
-        m_client = -1;
+        hosts_close_all();
         m_on = 0;
 
         pthread_mutex_lock(&m_lock);
@@ -844,11 +930,13 @@ int m17_ax25_service(void)
 
 void m17_ax25_status(char *out, unsigned n)
 {
+    int hosts = hosts_attached();
+
     pthread_mutex_lock(&m_lock);
     snprintf(out, n,
-             "AX.25 %s, loopback %s, port %u, queued %u, sent %u, "
+             "AX.25 %s, loopback %s, port %u, hosts %d, queued %u, sent %u, "
              "rx %u, tx %u, looped %u, dropped %u (dup %u, full %u)",
-             m_on ? "on" : "off", m_loopback ? "on" : "off", m_port,
+             m_on ? "on" : "off", m_loopback ? "on" : "off", m_port, hosts,
              m_bridge.count, m_bridge.sent, m_rx_frames, m_tx_frames, m_looped,
              m_rejected, m_bridge.dropped_dup, m_bridge.dropped_full);
     pthread_mutex_unlock(&m_lock);
