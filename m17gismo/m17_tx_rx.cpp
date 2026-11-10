@@ -96,12 +96,13 @@ static bool m17_tx_meta_fresh_fix(void){
 
 static void m17_tx_meta_from_gps(bool force){
     if (force) {
-        // Key-down: a text that has been set is the payload the operator asked
-        // for, so it wins over the position; with no text the position goes, and
-        // with neither the field stays empty.  Setting a text and clearing it is
-        // how the text is switched on and off.
-        if (meta_text_get()[0])           m_meta_kind = META_KIND_TEXT;
-        else if (m17_tx_meta_fresh_fix()) m_meta_kind = META_KIND_POSITION;
+        // Key-down.  A position that is fresh and switched on has the field to
+        // itself - the position tells a listener where you are, the text only
+        // says something.  Everything else is the text's turn: announcing
+        // switched off, no receiver, or no fix yet.  With no text either, the
+        // field goes out empty rather than carrying something stale.
+        if (m17_tx_meta_fresh_fix())      m_meta_kind = META_KIND_POSITION;
+        else if (meta_text_get()[0])      m_meta_kind = META_KIND_TEXT;
         else                              m_meta_kind = META_KIND_NONE;
     }
 

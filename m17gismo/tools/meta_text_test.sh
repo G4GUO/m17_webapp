@@ -4,9 +4,8 @@
 #
 # Starts an instance on a simulated radio, which loops its own transmission back
 # to itself, then reads back the text it heard announced in the META field it
-# just sent.  The position is left announcing, because the text has to win the
-# field while it is set: set switches the text on, clear switches it off and
-# hands the field back to the position.  Only one payload fits in META at a time.
+# just sent.  The position is left switched on: with no fix it has nothing to
+# send, so the text is what fills the field - which is the case this is about.
 #
 # Three phases, each on a FRESH instance and so a fresh receiver:
 #   set     the text is set from the command line, and must be heard back

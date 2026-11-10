@@ -179,7 +179,7 @@ void mmi_parse(char *cmd){
 		}else if(strcasecmp(p,"off")==0 || strcasecmp(p,"clear")==0 || strcasecmp(p,"none")==0){
 			meta_text_clear();
 			save_line_to_config("meta text", "meta text off");
-			snprintf(line, sizeof line, "META text cleared: the position goes in META again");
+			snprintf(line, sizeof line, "META text cleared: only the position is announced now");
 			printf("%s\n", line);
 			gui_cmd_resp(line);
 		}else{
@@ -187,7 +187,7 @@ void mmi_parse(char *cmd){
 			snprintf(line, sizeof line, "meta text %s", meta_text_get());
 			save_line_to_config("meta text", line);
 			snprintf(line, sizeof line,
-			         "META text set (%d of %d characters): it goes in META instead of the position",
+			         "META text set (%d of %d characters), announced when there is no position",
 			         (int)strlen(meta_text_get()), META_TEXT_MAX);
 			printf("%s\n", line);
 			gui_cmd_resp(line);

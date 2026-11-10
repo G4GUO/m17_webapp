@@ -318,7 +318,7 @@ def build(path: str) -> None:
                                            "your transmissions. It is sent only while the fix is fresh, about "
                                            "every 5 seconds; it reads <b>position off air</b> when you have "
                                            "switched the sending off, and <b>text instead</b> while a META text "
-                                           "has taken the field."],
+                                           "is standing in the field for it."],
         ["the compass", "The bearing to the station you are hearing, with the distance in kilometres. "
                         "The red needle points at them; the small yellow mark is the direction they say "
                         "they are travelling. It needs a fix of your own to work."],
@@ -340,12 +340,13 @@ def build(path: str) -> None:
         "text card under the SMS box. It is announced while you transmit, instead of the position, and "
         "never at the same time as it.")
     m.bullets([
-        "<b>Setting it.</b> Type up to 52 characters into the box and press <b>set</b>: from the next "
-        "transmission that text is what META carries, even while you have a fix. It is kept for the next "
-        "start, and <b>clear</b> switches it off and hands the field back to the position.",
-        "<b>Nothing to send.</b> With no text set and no fix, META goes out empty rather than carrying a "
-        "position that has gone stale. If META should carry nothing at all, leave the box empty and give "
-        "the command <b>gps meta off</b> as well.",
+        "<b>Setting it.</b> Type up to 52 characters into the box and press <b>set</b>; it is kept for the "
+        "next start, and <b>clear</b> stops it being announced. Pressing <b>set</b> with an empty box does "
+        "the same as <b>clear</b>, because there is then no text to send.",
+        "<b>Priority.</b> A fresh fix, with position announcing switched on, always wins the field: the "
+        "badge reads <b>position first</b> and the text is not sent. It reads <b>set</b> when the text is "
+        "what goes out \u2014 announcing switched off, no receiver, or no fix yet. With neither, META goes "
+        "out blank.",
         "<b>It is public.</b> The text travels with every transmission in clear, exactly as the position "
         "does, so it is visible to anyone listening and to any client that displays the field.",
         "<b>Hearing one.</b> A text another station announces appears in the console as "
@@ -591,10 +592,10 @@ def build(path: str) -> None:
     m.h2("META text")
     m.p("The same shape as the SMS box above it, because it puts words on air the same way - but these "
         "words travel in the link setup of every transmission rather than as a message. <b>set</b> keeps "
-        "up to 52 characters and it is what every transmission carries instead of the position; "
-        "<b>clear</b> switches it off and the position goes back in the field. The badge reads <b>on</b> "
-        "or <b>off</b>, the count beside it is how much of the 52 characters you have used, and the "
-        "Position panel shows <b>text instead</b> while a text is taking the field. Underneath, the last text heard from any station is shown "
+        "up to 52 characters and announces it whenever there is no position to announce; <b>clear</b> "
+        "stops that. The badge says which payload is going out: <b>off</b> (nothing set), <b>set</b>, or "
+        "<b>position first</b> when the position is being sent instead, and the count beside it is how "
+        "much of the 52 characters you have used. Underneath, the last text heard from any station is shown "
         "with its callsign and how long ago it arrived, overwritten as new ones come in. Section 5 "
         "explains the field itself.")
 
