@@ -17,6 +17,7 @@ let st = {};                       // last state message
 let audioReady = false;
 let audioOff = false;               // stopped on purpose, as opposed to never started
 let linkUp = false;                 // socket open - not the same as safe to key
+let visHook = false;                // the visibility listener is added once
 let txHeld = false;
 
 // ---------------------------------------------------------------------------
@@ -732,6 +733,16 @@ function wire() {
   const down = (e) => {
     e.preventDefault();
     if (btn.disabled) return;          // no microphone to feed a carrier; the station would refuse it too
+    // A suspended context fires no callbacks, so the station hears nothing and its
+    // watchdog drops the carrier after a few seconds - "transmit comes on, then goes
+    // off".  iOS suspends for a screen lock, a call, or an audio route change, and a
+    // press is the only moment it will let the context start again.
+    if (audio.ctx && audio.ctx.state !== 'running') {
+      const why = audio.ctx.state;
+      addLog('info', 'audio context was ' + why + ' - resuming for this press');
+      audio.ctx.resume().then(() => addLog('info', 'audio context: ' + audio.ctx.state))
+        .catch(() => addLog('err', 'audio context would not resume (still ' + audio.ctx.state + ') - the station will drop the carrier'));
+    }
     if (!txHeld) { txHeld = true; btn.classList.add('live'); cmd('tx'); setSpkMute(); }
   };
   const up = (e) => {
@@ -1243,6 +1254,23 @@ async function startAudio() {
     // be able to stall the set-up: the nodes below work while suspended, and a
     // later gesture resumes the context.
     await Promise.race([audio.ctx.resume().catch(() => {}), sleep(1500)]);
+    // Say so when the context stops: silence from the client is what makes the
+    // station drop a carrier, and a suspended context is the usual reason on iOS.
+    audio.ctx.onstatechange = (ev) => {
+      const s = (ev && ev.target ? ev.target : audio.ctx);
+      if (!s) return;
+      addLog(s.state === 'running' ? 'info' : 'err', 'audio context: ' + s.state);
+    };
+    // Returning to the page is a chance to restart it: iOS leaves the context
+    // suspended after the screen was locked, and a page in the background sends
+    // no microphone audio at all.  Added once, however many times audio is started.
+    if (!visHook) {
+      visHook = true;
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && audio.ctx && audio.ctx.state !== 'running')
+          audio.ctx.resume().catch(() => {});
+      });
+    }
     const rate = audio.ctx.sampleRate;
     down = new Downsampler(rate, RATE);
     up = new Upsampler(RATE, rate);

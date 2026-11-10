@@ -92,7 +92,11 @@ static long  m_last_state_ms;
 // that keyed it owns the keying, and silence from it releases it.
 static int   m_keyed_client = -1;
 static long  m_last_mic_ms;
-#define MIC_WATCHDOG_MS 3000
+// How long a keyed station waits for microphone audio before releasing.  It is a
+// stuck-carrier guard for a client that has gone away, so it must be longer than
+// a stall a phone can produce on its own: a suspended AudioContext on iOS takes
+// a moment to restart, and a 3 s limit dropped overs mid-word.
+#define MIC_WATCHDOG_MS 8000
 static long  m_frames_seen;
 
 // ---------------------------------------------------------------------------
@@ -585,6 +589,10 @@ static void web_unkey(const char *why) {
     m17_txrx_ptt_off();
     gui_rx();
     log_send("info", "unkeyed: %s", why);
+    // The ring buffer is not the journal: without this line a carrier dropped by
+    // the watchdog leaves no trace anyone can look at afterwards.
+    printf("m17web: unkeyed: %s\n", why);
+    fflush(stdout);
     push_state();
 }
 
@@ -796,6 +804,14 @@ static void web_on_msg(int id, int is_binary, const uint8_t *data, int len, void
         }
         if (extract_cmd(txt, cmd, sizeof(cmd)) == 0) {
             web_note_ptt(cmd, id);
+            // Who moved the audio or the key: the ring buffer cannot say, and a
+            // route that "keeps defaulting to mute" has to be traceable to a client.
+            if (strncasecmp(cmd, "audio", 5) == 0 || strncasecmp(cmd, "tx", 2) == 0 ||
+                strncasecmp(cmd, "rx", 2) == 0) {
+                const char *r = ws_client_role(m_srv, id);
+                printf("m17web: client %d (%s): %s\n", id, (r && r[0]) ? r : "page", cmd);
+                fflush(stdout);
+            }
             run_command(cmd);
         }
         return;
