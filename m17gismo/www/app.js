@@ -1069,17 +1069,15 @@ function dialLevels(mic, spk) {
 // Audio (WebAudio <-> 8 kHz PCM over the WebSocket)
 // ---------------------------------------------------------------------------
 const audio = {
-  ctx: null, micCtx: null, outGain: null, micNode: null, spkNode: null,
+  ctx: null, outGain: null, micNode: null, spkNode: null,
   stream: null, queue: [], queued: 0, playing: false, lastMicLevel: 0,
 };
 
 // ---- mic-dsp-begin -------------------------------------------------------
 // Windowed-sinc low pass for decimating to 8 kHz: flat to 3.4 kHz, stop band
-// from the output's Nyquist.  A box average is not an anti-alias filter - at
-// 48 kHz it passes 5 kHz down to 3 kHz only 6 dB down, so sibilants and room
-// hiss fold into the band the 3200 bps vocoder spends its bits on, and the
-// result is heard as gravel.  Measured on the box version: 5 kHz -> -6 dB,
-// 6 kHz -> -10 dB, 11 kHz -> -13 dB, all landing in 1-3 kHz.
+// from the output's Nyquist.  The box average this replaces is not an anti-alias
+// filter - at 48 kHz it passes 5 kHz down to 3 kHz only 6 dB down, so sibilants
+// and room hiss fold into the band the 3200 bps vocoder spends its bits on.
 function decimatorTaps(inRate, taps) {
   const cutoff = Math.min(3700, 0.44 * inRate);
   const h = new Float64Array(taps), m = (taps - 1) / 2;
@@ -1098,31 +1096,33 @@ function decimatorTaps(inRate, taps) {
 }
 
 class Downsampler {
-  // Rate conversion from the capture context down to 8 kHz, in floats.  The
-  // filter runs at the input rate and a cubic pick takes the fractional output
-  // positions, so 44.1 kHz works as well as 48 kHz without any pattern of 5 and
-  // 6 sample averages to modulate the signal.  Unused when the capture context
-  // is itself 8 kHz, which is the path the page prefers.
+  // Decimation from the context rate to 8 kHz, emitting numbers already scaled
+  // to int16 (the contract this page had).  The filter runs at the input rate
+  // and a cubic pick takes the fractional output positions, so 44.1 kHz works as
+  // well as 48 kHz without a pattern of 5 and 6 sample averages modulating the
+  // signal.  It also carries the peak limiter: the station's micgain is applied
+  // to samples that are already int16, so a hot webcam would arrive with flat
+  // tops that no trim on the Pi can undo.
   constructor(inRate, outRate) {
     this.step = inRate / outRate;
     this.id = this.step < 1.0001;
+    this.ceiling = 0.94 * 32767;
+    this.g = 1;
     if (this.id) return;
-    // 321 taps keeps the stop band a few hundred hertz below the output's
-    // Nyquist, which is what makes 3.4 kHz flat and 4.1 kHz 70 dB down.
     this.h = decimatorTaps(inRate, Math.max(129, Math.min(321, Math.round(inRate / 116) | 1)));
     this.n = this.h.length;
-    this.x = new Float32Array(this.n);    // input history ring
+    this.x = new Float32Array(this.n);
     this.w = -1;
-    this.fy = new Float64Array(32);       // filtered samples, by absolute index
-    this.i = -1;                          // absolute index of the newest one
-    this.p = 0;                           // absolute position of the next output
+    this.fy = new Float64Array(32);
+    this.i = -1;
+    this.p = 0;
     this.rebaseAt = 1 << 21;
   }
   process(float32) {
     const res = [];
     if (this.id) {
-      for (let i = 0; i < float32.length; i++) res.push(float32[i]);
-      return res;
+      for (let i = 0; i < float32.length; i++) res.push(float32[i] * 32767);
+      return this.limit(res);
     }
     const n = this.n, h = this.h, x = this.x, fy = this.fy;
     for (let s = 0; s < float32.length; s++) {
@@ -1132,7 +1132,6 @@ class Downsampler {
       for (let k = 0; k < n; k++) { acc += h[k] * x[j]; j = j === 0 ? n - 1 : j - 1; }
       this.i++;
       fy[this.i & 31] = acc;
-      // Only emit a position once two samples of look-ahead exist for the pick.
       while (this.p + 2 <= this.i) {
         const idx = Math.floor(this.p), f = this.p - idx;
         const a = fy[(idx - 1) & 31], b = fy[idx & 31],
@@ -1140,32 +1139,17 @@ class Downsampler {
         const c1 = 0.5 * (c - a);
         const c2 = a - 2.5 * b + 2 * c - 0.5 * d;
         const c3 = 0.5 * (d - a) + 1.5 * (b - c);
-        res.push(((c3 * f + c2) * f + c1) * f + b);       // Catmull-Rom
+        res.push((((c3 * f + c2) * f + c1) * f + b) * 32767);   // Catmull-Rom
         this.p += this.step;
       }
       if (this.i > this.rebaseAt) {
-        // Both counters are only ever used modulo the ring and relative to each
-        // other, so shifting them by a multiple of the ring keeps them exact.
         const d = (this.i - 16) & ~31;
         this.i -= d; this.p -= d;
       }
     }
-    return res;
+    return this.limit(res);
   }
-}
-
-class PeakLimiter {
-  // The browser is the only place clipping can be prevented: the station's
-  // micgain is applied to samples that are already int16, so a hot webcam
-  // arrives with flat tops and no trim on the Pi can put the waveform back.
-  // Attack is the current block (never let a peak through), release is slow
-  // enough not to pump between syllables.
-  constructor(ceiling = 0.94, releaseMs = 500) {
-    this.ceiling = ceiling;
-    this.releaseMs = releaseMs;
-    this.g = 1;
-  }
-  process(s) {
+  limit(s) {
     if (!s.length) return s;
     let peak = 0;
     for (let i = 0; i < s.length; i++) { const a = s[i] < 0 ? -s[i] : s[i]; if (a > peak) peak = a; }
@@ -1173,30 +1157,29 @@ class PeakLimiter {
       const need = this.ceiling / peak;
       if (need < this.g) this.g = need;
     } else if (this.g < 1) {
-      const t = s.length / RATE;                     // seconds in this block
-      this.g = 1 - (1 - this.g) * Math.exp(-t * 1000 / this.releaseMs);
+      const t = s.length / RATE;
+      this.g = 1 - (1 - this.g) * Math.exp(-t * 1000 / 500);
     }
     for (let i = 0; i < s.length; i++) {
-      let v = s[i] * this.g;
-      if (v > this.ceiling) v = this.ceiling; else if (v < -this.ceiling) v = -this.ceiling;
+      let v = Math.round(s[i] * this.g);
+      if (v > 32767) v = 32767; else if (v < -32768) v = -32768;
       s[i] = v;
     }
     return s;
   }
 }
-// The wire format is one byte of tag followed by s16le, and the station takes
-// the samples to be at data+1 (webui.cpp, and tools/android_proto_check.py
-// builds the same thing).  Frame the microphone in an Int16Array and the tag
-// becomes a two byte word, so every sample is read one byte early: the Pi then
-// decodes the high byte of one sample ORed with the low byte of the next, which
-// measured -21 dB SNR against the source and full scale peak on speech that
-// never passed 11212 - that is the rasping "distortion" the operator hears, and
-// it is noise, not speech.  Keep this function the one place that packs a frame.
-function packMicFrame(samples, off) {
+
+// The wire format is one byte of tag followed by s16le, and the station takes the
+// samples to be at data+1 (webui.cpp, and tools/android_proto_check.py builds the
+// same thing).  Framing the microphone in an Int16Array makes the tag a two byte
+// word, so every sample is read one byte early and the Pi decodes the high byte of
+// one sample ORed with the low byte of the next - noise, measured at -21 dB SNR
+// against the source.  Keep this the one place that packs a frame.
+function packMicFrame(int16, off) {
   const frame = new Uint8Array(1 + 320);
   frame[0] = TAG_MIC;
   const dv = new DataView(frame.buffer);
-  for (let i = 0; i < 160; i++) dv.setInt16(1 + i * 2, Math.round(samples[off + i] * 32767), true);
+  for (let i = 0; i < 160; i++) dv.setInt16(1 + i * 2, int16[off + i] | 0, true);
   return frame;
 }
 // ---- mic-dsp-end ---------------------------------------------------------
@@ -1242,11 +1225,7 @@ function setSpkMute() {
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 async function startAudio() {
-  if (audioReady) {
-    try { await audio.ctx.resume(); } catch (e) {}
-    if (audio.micCtx) { try { await audio.micCtx.resume(); } catch (e) {} }
-    return true;
-  }
+  if (audioReady) { try { await audio.ctx.resume(); } catch (e) {} return true; }
   try {
     audio.ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
     // resume() never settles on a machine with no output device, so it must not
@@ -1254,40 +1233,24 @@ async function startAudio() {
     // later gesture resumes the context.
     await Promise.race([audio.ctx.resume().catch(() => {}), sleep(1500)]);
     const rate = audio.ctx.sampleRate;
+    down = new Downsampler(rate, RATE);
     up = new Upsampler(RATE, rate);
-
-    // Capture goes on its own 8 kHz context where the browser will make one:
-    // its resampler is a proper anti-alias filter, so nothing above 4 kHz can
-    // fold into the voice band.  Where the rate request is ignored (some
-    // browsers pin the hardware rate), Downsampler does the filtering instead.
-    let capCtx = audio.ctx, capRate = rate;
-    try {
-      const c = new (window.AudioContext || window.webkitAudioContext)(
-        { sampleRate: RATE, latencyHint: 'interactive' });
-      if (c.sampleRate === RATE) { audio.micCtx = capCtx = c; capRate = RATE; }
-      else if (c.close) c.close();
-    } catch (e) { /* keep the playback context and filter in JS */ }
-    if (audio.micCtx) await Promise.race([audio.micCtx.resume().catch(() => {}), sleep(1500)]);
-    down = new Downsampler(capRate, RATE);
-    const limiter = new PeakLimiter();
 
     audio.stream = await navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
     });
-    const src = capCtx.createMediaStreamSource(audio.stream);
+    const src = audio.ctx.createMediaStreamSource(audio.stream);
     audio.outGain = audio.ctx.createGain();
     // Unity here by design: the received audio arrives already scaled by the
     // station's speaker volume, which is the control the meters reflect.
     audio.outGain.gain.value = txHeld ? 0 : 1;
     audio.outGain.connect(audio.ctx.destination);
 
-    // microphone -> 8 kHz -> websocket.  A 256 sample block is 32 ms at 8 kHz
-    // and 21 ms at 48 kHz; 1024 in the 8 kHz context would be 128 ms, and the
-    // station starts the over after 125 ms of pre-roll.
-    audio.micNode = capCtx.createScriptProcessor(capRate === RATE ? 256 : 1024, 1, 1);
+    // microphone -> 8 kHz -> websocket
+    audio.micNode = audio.ctx.createScriptProcessor(1024, 1, 1);
     const pending = [];
     audio.micNode.onaudioprocess = (ev) => {
-      const s = limiter.process(down.process(ev.inputBuffer.getChannelData(0)));
+      const s = down.process(ev.inputBuffer.getChannelData(0));
       // The passthrough buffer must be silent: we never monitor ourselves
       for (let i = 0; i < ev.outputBuffer.numberOfChannels; i++)
         ev.outputBuffer.getChannelData(i).fill(0);
@@ -1301,7 +1264,7 @@ async function startAudio() {
       }
     };
     src.connect(audio.micNode);
-    audio.micNode.connect(capCtx.destination); // sink so the node runs; buffer stays silent
+    audio.micNode.connect(audio.ctx.destination); // sink so the node runs; buffer stays silent
 
     // 8 kHz -> speaker
     audio.spkNode = audio.ctx.createScriptProcessor(2048, 0, 1);
@@ -1319,8 +1282,7 @@ async function startAudio() {
     // is usually the laptop's own array rather than the one that was expected.
     const track = audio.stream.getAudioTracks ? audio.stream.getAudioTracks()[0] : null;
     addLog('info', 'browser audio running: ' + (track ? track.label : 'microphone') +
-      ' at ' + capRate + ' Hz, carried at ' + RATE + ' Hz' +
-      (capRate === RATE ? ' (browser resampler)' : ' (page filter)'));
+      ' at ' + rate + ' Hz, carried at ' + RATE + ' Hz');
     return true;
   } catch (err) {
     const msg = 'browser audio failed: ' + err.message +

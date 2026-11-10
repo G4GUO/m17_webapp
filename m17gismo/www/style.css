@@ -62,10 +62,12 @@ input.flash { animation: flash .8s ease-out; }
   100% { border-color: var(--line); background: var(--panel2); }
 }
 
-/* Diagnostics off: a clean panel.  The console card and the counters that only
-   matter while debugging are hidden; nothing that shows what the station is
-   doing (PTT lamp, frame direction, meters) is affected. */
-body.no-diag .log-card,
+/* Diagnostics off: a clean panel.  The command help is reference material for
+   the command line, so it goes; the console card stays, because the command
+   input lives in it and a reply is only worth having if you can see it.  The
+   counters that only matter while debugging go too; nothing that shows what the
+   station is doing (PTT lamp, frame direction, meters) is affected. */
+body.no-diag #helpcard,
 body.no-diag #hwinfo,
 body.no-diag #txdrops { display: none; }
 /* The audio box writes its own status lines and colours them green, amber or red
