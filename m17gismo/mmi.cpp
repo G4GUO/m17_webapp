@@ -584,7 +584,12 @@ void mmi_parse(char *cmd){
 	 * Nothing depends on a socket staying open. */
 	if(strncmp(token[0],"mailbox",7) == 0 && nt >= 2){
 		if(strcasecmp(token[1],"off") == 0){
+			// Keep it off across a restart: the line stayed in config.txt, so
+			// the station came back with the assistant live every time it was
+			// restarted - which is how it reappeared after being switched off.
+			int was_on = m17_mailbox_enabled();
 			m17_mailbox_set("", "");
+			if(was_on) save_line_to_config("mailbox", "mailbox off");
 			gui_cmd_resp("mailbox: off");
 		} else {
 			const char *out = (nt >= 3) ? token[2] : NULL;
