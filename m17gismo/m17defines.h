@@ -17,7 +17,8 @@
 // Size of decimating filter in receiver
 #define DF5_FN 71
 
-typedef enum{RADIO_TYPE_PLUTO,RADIO_TYPE_LIME,RADIO_TYPE_SIM}RadioType;
+typedef enum{RADIO_TYPE_PLUTO,RADIO_TYPE_LIME,RADIO_TYPE_SIM,
+             RADIO_TYPE_FEATHER}RadioType;
 
 // Simulated radio (radio_sim.cpp), selected with -r sim
 const char *radio_name(void);
@@ -231,6 +232,14 @@ bool radio_keyed(void);
 void radio_set_tx_frequency(uint64_t freq);
 void radio_set_rx_frequency(uint64_t freq);
 int  radio_receive_samples( scmplx *s, uint32_t n);
+
+//
+// One receive step, whatever the radio is.  An IQ radio turns samples into
+// symbols here (m17_dsp_rx); the Feather has already done that on the board, so
+// this drains the serial link instead.  Either way what comes out is a call to
+// m17_rx_symbols().
+//
+void radio_rx_process( scmplx *s, int len);
 int  radio_transmit_samples( scmplx *s, uint32_t n);
 void radio_silence(int ms);
 void radio_set_tx_gain(float gain);

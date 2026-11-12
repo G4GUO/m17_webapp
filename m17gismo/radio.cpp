@@ -17,6 +17,9 @@
 #ifdef HAVE_SIM
 #include "radio_sim.h"
 #endif
+#ifdef HAVE_FEATHER
+#include "feather.h"
+#endif
 
 static bool m_afc;
 static double m_cor_fac;
@@ -80,6 +83,9 @@ const char *radio_name(void){
 #ifdef HAVE_SIM
 	if( m_radio_type == RADIO_TYPE_SIM )   return "sim";
 #endif
+#ifdef HAVE_FEATHER
+	if( m_radio_type == RADIO_TYPE_FEATHER ) return "feather";
+#endif
 	return "none";
 }
 
@@ -123,6 +129,17 @@ int radio_open(RadioType type){
 #ifdef HAVE_SIM
 	if( m_radio_type == RADIO_TYPE_SIM ) sim_open();
 #endif
+#ifdef HAVE_FEATHER
+	if( m_radio_type == RADIO_TYPE_FEATHER ){
+		// Opening the port is not fatal if it fails: the board can be plugged in
+		// later, and the web UI should stay up and say so.
+		if( !feather_open( getenv("FEATHER_TTY") ) ){
+			fprintf(stderr, "m17web: %s\n", feather_status());
+			fprintf(stderr, "m17web: set FEATHER_TTY to the board's port (default %s)\n",
+			        FEATHER_DEFAULT_TTY);
+		}
+	}
+#endif
 #ifdef HAVE_RPI_GPIO
 	rpi_gpio_open();
 #endif
@@ -144,6 +161,9 @@ void radio_close(void){
 }
 void radio_transmit(void){
 	m_keyed = true;
+#ifdef HAVE_FEATHER
+	if( m_radio_type == RADIO_TYPE_FEATHER ) feather_key(true);
+#endif
 #ifdef HAVE_PLUTO
 	if( m_radio_type == RADIO_TYPE_PLUTO ) pluto_tx_flush();   // start the over clean
 #endif
@@ -167,6 +187,9 @@ void radio_transmit(void){
 }
 void radio_receive(void){
 	m_keyed = false;
+#ifdef HAVE_FEATHER
+	if( m_radio_type == RADIO_TYPE_FEATHER ) feather_key(false);
+#endif
 #ifdef HAVE_LIME
 	if( m_radio_type == RADIO_TYPE_LIME ){
 		lime_got_to_receive();
@@ -301,6 +324,11 @@ bool radio_get_afc_status(void){
 
 int radio_receive_samples( scmplx *s, uint32_t n){
 	int nr = 1920;
+#ifdef HAVE_FEATHER
+	// No samples from the Feather: the board already ran the discriminator and
+	// the symbol tracker, so there is nothing here to demodulate.
+	if( m_radio_type == RADIO_TYPE_FEATHER ) return 0;
+#endif
 #ifdef HAVE_LIME
 	if( m_radio_type == RADIO_TYPE_LIME ){
 		nr = lime_receive_samples((int16_t *)s, n);
@@ -328,6 +356,20 @@ int radio_receive_samples( scmplx *s, uint32_t n){
 	}
 #endif
 	return nr;
+}
+//
+// The single receive seam.  With a Feather fitted the symbols arrive over the
+// serial link and go straight to the framer; otherwise the IQ path runs the
+// discriminator and the symbol tracker first.
+//
+void radio_rx_process( scmplx *s, int len){
+#ifdef HAVE_FEATHER
+	if( m_radio_type == RADIO_TYPE_FEATHER ){
+		feather_poll();
+		return;
+	}
+#endif
+	m17_dsp_rx( s, len );
 }
 /* Zero samples to the transmitter for a given number of milliseconds.  Used to
  * start and finish a data burst at zero amplitude: the modulator is constant

@@ -237,7 +237,7 @@ void *m17_txrx_net_thread(void *arg){
 
     	if(m_net_state == STATE_RX){
 		    int len = radio_receive_samples( m_rsamples, N_SAMPLES );
-		    m17_dsp_rx( m_rsamples, len );
+		    radio_rx_process( m_rsamples, len );
 			radio_rssi_update();
 			int n = buff_size();
 			if( n > 15 ){
@@ -424,7 +424,7 @@ void *m17_txrx_thread(void *arg){
 			    // take the whole process down).
 			    // Receive audio
 			    int len = radio_receive_samples( m_rsamples, N_SAMPLES );
-			    m17_dsp_rx( m_rsamples, len);
+			    radio_rx_process( m_rsamples, len );
 			    radio_rssi_update();
 		    }
 		    // Send EOT
@@ -444,7 +444,7 @@ void *m17_txrx_thread(void *arg){
 			    // Re-open the audio paths if the web UI changed the backend
 			    if (audio_backend_pending()) audio_apply_pending();
 			    int len = radio_receive_samples( m_rsamples, N_SAMPLES );
-			    m17_dsp_rx( m_rsamples, len );
+			    radio_rx_process( m_rsamples, len );
 			    // Throw input samples away
 				radio_rssi_update();
 				// AX.25 over M17: transmit a queued packet if the channel is

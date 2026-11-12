@@ -11,6 +11,8 @@
 #   PLUTO=0        no Pluto / libiio back end
 #   LIME=0         no LimeSDR back end
 #   SIM=1          include the simulated radio
+#   FEATHER=1      include the STM32F405 Feather modem back end (default: 1;
+#                  it needs nothing but a serial port, so it is always built)
 #   CONSOLE=1      build the ncurses UI instead of the web UI
 #   WEB=0          leave the web UI out
 #   EMBED=1        embed www/ into the binary (default: 1 if www/ exists)
@@ -35,6 +37,7 @@ PULSE  ?= $(shell pkg-config --exists libpulse-simple 2>/dev/null && echo 1 || e
 PLUTO  ?= $(shell test -f /usr/include/iio.h -o -f /usr/local/include/iio.h && echo 1 || echo 0)
 LIME   ?= $(shell test -f /usr/include/limesuite/LimeSuite.h -o -f /usr/local/include/LimeSuite.h -o -f /usr/include/LimeSuite.h && echo 1 || echo 0)
 SIM    ?= 0
+FEATHER ?= 1
 CONSOLE ?= 0
 WEB    ?= 1
 EMBED  ?= $(shell test -d www && echo 1 || echo 0)
@@ -82,6 +85,14 @@ else
 SRCS := $(filter-out radio_sim.cpp,$(SRCS))
 endif
 
+# The Feather modem (feather.c, feather_link.c).  No libraries, no headers to
+# find, just a serial port at run time: -r feather.
+ifeq ($(FEATHER),1)
+CFLAGS   += -DHAVE_FEATHER
+CXXFLAGS += -DHAVE_FEATHER
+FEATHER_CSRCS = feather_link.c
+endif
+
 # Audio back ends: ALSA talks to the sound card directly (no PulseAudio in the
 # path), which is the reliable option on a Pi; PULSE goes through PulseAudio.
 ALSA ?= $(shell test -f /usr/include/alsa/asoundlib.h && echo 1 || echo 0)
@@ -105,7 +116,7 @@ endif
 
 # Web UI needs the C server; the console build needs ncurses instead.
 # The AX.25 packet code is taken verbatim from G4GUO/m17-ax25 and built as C.
-CSRCS = kiss.c m17_packet.c m17_bridge.c
+CSRCS = kiss.c m17_packet.c m17_bridge.c $(FEATHER_CSRCS)
 ifeq ($(WEB),1)
 CXXFLAGS += -DUI_WEB
 CSRCS    += webserver.c
@@ -233,7 +244,7 @@ HDRS = $(wildcard *.h) $(GENERATED)
 $(OBJS): $(HDRS)
 
 # ---------------------------------------------------------------------------
-.PHONY: all sim console bitexact clean help assets
+.PHONY: all sim console bitexact clean help assets feathertest
 
 all: $(TARGET)
 
@@ -296,9 +307,16 @@ www_assets.h: $(wildcard www/*) tools/embed_www.py
 assets:
 	python3 tools/embed_www.py www > www_assets.h
 
+# The Feather back end over a pty, with a fake board on the other end.  No
+# hardware, no SDR libraries, no codec2 state: just the wire and the seam.
+feathertest: tests/feather_test.cpp feather.cpp feather_link.c
+	$(CC) $(CFLAGS) -c feather_link.c -o feather_link_test.o
+	$(CXX) $(CXXFLAGS) -I. tests/feather_test.cpp feather.cpp feather_link_test.o \
+	       -o feathertest $(LIBS)
+
 clean:
 	rm -f $(TARGET) *.o www_assets.h
-	rm -f tests/codec2_frame_stock tests/codec2_frame_mod
+	rm -f tests/codec2_frame_stock tests/codec2_frame_mod feathertest feather_link_test.o
 	rm -f codec2mod/*.o codec2mod/src/*.o
 	rm -f $(C2F_OBJS)
 

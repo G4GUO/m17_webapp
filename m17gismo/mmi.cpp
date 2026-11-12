@@ -418,6 +418,9 @@ void mmi_parse(char *cmd){
 	// Reference clock trim.  The value is the measured XO in Hz, so a slow
 	// crystal is below 40000000.  Changing it moves every frequency the chip
 	// generates, so the current LO is re-applied straight afterwards.
+	// ...and it trims the Pluto's crystal, so it only exists in a Pluto build.
+	// Unguarded, this call is what stopped 'make sim' from linking at all.
+#ifdef HAVE_PLUTO
 	if(strncmp(token[0],"xo",2)==0){
 		if(nt == 2){
 			long long hz = atoll(token[1]);
@@ -437,6 +440,12 @@ void mmi_parse(char *cmd){
 			}
 		}
 	}
+#else
+	if(strncmp(token[0],"xo",2)==0){
+		gui_cmd_resp("xo: there is no Pluto in this build");
+		valid = true;
+	}
+#endif
 
 	// Frequency correction factor
 	if(strncmp(token[0],"fc",2)==0){

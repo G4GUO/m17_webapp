@@ -1,5 +1,7 @@
 *.o
 m17gismo/m17web
+m17gismo/feathertest
+m17gismo/feather_link_test.o
 m17gismo/m17web
 m17gismo/m17gismo
 m17gismo/www_assets.h
