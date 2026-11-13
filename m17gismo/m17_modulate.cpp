@@ -5,6 +5,9 @@
 #ifdef HAVE_FEATHER
 #include "feather.h"
 #endif
+#ifdef HAVE_CM108
+#include "cm108.h"
+#endif
 
 #define TX_FN 31
 static float *m_tx_c;
@@ -99,6 +102,13 @@ void m17_mod_dibits(uint8_t *dibits, int len){
     }
     if( radio_get_type() == RADIO_TYPE_FEATHER_LOOP ){
         feather_loop_tx_dibits( dibits, len );
+        return;
+    }
+#endif
+#ifdef HAVE_CM108
+    // The same chains, on a sound fob instead of the board.
+    if( radio_get_type() == RADIO_TYPE_CM108 ){
+        cm108_tx_dibits( dibits, len );
         return;
     }
 #endif

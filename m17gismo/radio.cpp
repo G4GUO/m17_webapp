@@ -9,6 +9,8 @@
 //   HAVE_SIM       simulated radio (no hardware, TX looped back into RX)
 //   HAVE_FEATHER   the STM32F405 modem over a serial port, and feather-loop,
 //                  the same modem with its baseband output wired to its own input
+//   HAVE_CM108     a CM108/CM119 sound fob: the Feather's DSP chains on a
+//                  cheap USB sound card, PTT on the codec's GPIO3
 //   HAVE_RPI_GPIO  Raspberry Pi GPIO PTT in/out
 //
 #include <math.h>
@@ -22,6 +24,9 @@
 #endif
 #ifdef HAVE_FEATHER
 #include "feather.h"
+#endif
+#ifdef HAVE_CM108
+#include "cm108.h"
 #endif
 
 static bool m_afc;
@@ -90,6 +95,9 @@ const char *radio_name(void){
 	if( m_radio_type == RADIO_TYPE_FEATHER )      return "feather";
 	if( m_radio_type == RADIO_TYPE_FEATHER_LOOP ) return "feather-loop";
 #endif
+#ifdef HAVE_CM108
+	if( m_radio_type == RADIO_TYPE_CM108 )        return "cm108";
+#endif
 	return "none";
 }
 
@@ -148,6 +156,14 @@ int radio_open(RadioType type){
 		fprintf(stderr, "m17web: %s\n", feather_loop_status());
 	}
 #endif
+#ifdef HAVE_CM108
+	if( m_radio_type == RADIO_TYPE_CM108 ){
+		// Not fatal either: a fob is a thing that gets unplugged, and the reason
+		// it would not open is the message the operator needs.
+		cm108_open( NULL, NULL );
+		fprintf(stderr, "m17web: %s\n", cm108_status());
+	}
+#endif
 #ifdef HAVE_RPI_GPIO
 	rpi_gpio_open();
 #endif
@@ -163,6 +179,9 @@ void radio_close(void){
 #ifdef HAVE_SIM
 	if( m_radio_type == RADIO_TYPE_SIM ) sim_close();
 #endif
+#ifdef HAVE_CM108
+	if( m_radio_type == RADIO_TYPE_CM108 ) cm108_close();
+#endif
 #ifdef HAVE_RPI_GPIO
 	rpi_gpio_close();
 #endif
@@ -171,6 +190,10 @@ void radio_transmit(void){
 	m_keyed = true;
 #ifdef HAVE_FEATHER
 	if( m_radio_type == RADIO_TYPE_FEATHER ) feather_key(true);
+#endif
+#ifdef HAVE_CM108
+	// Padded: silence, the PTT edge, silence on the air (see cm108_key).
+	if( m_radio_type == RADIO_TYPE_CM108 ) cm108_key(true);
 #endif
 #ifdef HAVE_PLUTO
 	if( m_radio_type == RADIO_TYPE_PLUTO ) pluto_tx_flush();   // start the over clean
@@ -197,6 +220,9 @@ void radio_receive(void){
 	m_keyed = false;
 #ifdef HAVE_FEATHER
 	if( m_radio_type == RADIO_TYPE_FEATHER ) feather_key(false);
+#endif
+#ifdef HAVE_CM108
+	if( m_radio_type == RADIO_TYPE_CM108 ) cm108_key(false);
 #endif
 #ifdef HAVE_LIME
 	if( m_radio_type == RADIO_TYPE_LIME ){
@@ -248,6 +274,12 @@ bool radio_keyed(void){
 	// it then calls m17_txrx_ptt_on() and the transmitter never unkeys.
 	if( m_radio_type == RADIO_TYPE_FEATHER )      return false;
 	if( m_radio_type == RADIO_TYPE_FEATHER_LOOP ) return false;
+#endif
+#ifdef HAVE_CM108
+	// GPIO3 is configured as an output, so there is no PTT input to read.  Same
+	// trap as the Feather: falling through to m_keyed makes the hardware PTT
+	// monitor see the program's own keying and re-key the transmitter for ever.
+	if( m_radio_type == RADIO_TYPE_CM108 ) return false;
 #endif
 #ifdef HAVE_SIM
 	if( m_radio_type == RADIO_TYPE_SIM ) return sim_is_keyed();
@@ -355,6 +387,14 @@ int radio_receive_samples( scmplx *s, uint32_t n){
 		return 0;
 	}
 #endif
+#ifdef HAVE_CM108
+	if( m_radio_type == RADIO_TYPE_CM108 ){
+		// The fob's capture stream is the receiver: read n samples, run the
+		// chain, and hand the symbols up from inside cm108_poll().
+		cm108_poll( (int)n );
+		return 0;
+	}
+#endif
 #ifdef HAVE_LIME
 	if( m_radio_type == RADIO_TYPE_LIME ){
 		nr = lime_receive_samples((int16_t *)s, n);
@@ -398,6 +438,10 @@ void radio_rx_process( scmplx *s, int len){
 	// s[] are a placeholder so the receive loop keeps its shape.
 	if( m_radio_type == RADIO_TYPE_FEATHER_LOOP ) return;
 #endif
+#ifdef HAVE_CM108
+	// Symbols were delivered by cm108_poll() while the samples were being read.
+	if( m_radio_type == RADIO_TYPE_CM108 ) return;
+#endif
 	m17_dsp_rx( s, len );
 }
 /* Zero samples to the transmitter for a given number of milliseconds.  Used to
@@ -416,6 +460,21 @@ void radio_silence(int ms){
 }
 int radio_transmit_samples( scmplx *s, uint32_t n){
 	int nr = 0;
+#ifdef HAVE_CM108
+	if( m_radio_type == RADIO_TYPE_CM108 ){
+		// Baseband straight to the fob: radio_silence() uses this to pad either
+		// end of a burst, and the samples are real (-1..1), not IQ.
+		float bb[512];
+		uint32_t done = 0;
+		while( done < n ){
+			uint32_t k = n - done; if( k > 512 ) k = 512;
+			for( uint32_t i = 0; i < k; i++ ) bb[i] = s[done + i].re / 32768.0f;
+			cm108_write_samples( bb, (int)k );
+			done += k;
+		}
+		nr = (int)n;
+	}
+#endif
 #ifdef HAVE_LIME
 	if( m_radio_type == RADIO_TYPE_LIME ){
 	    nr = lime_transmit_samples((int16_t *)s, n);

@@ -35,6 +35,9 @@ policy the firmware enforces and tests.
 
 ## Files
 
+The CM108 fob back end (`-r cm108`, docs/CM108.md) is the bench alternative to
+this one: the same chains, real converters, PTT on the codec's GPIO.
+
 | file | what it is |
 |---|---|
 | `feather.cpp` | the back end: serial port, link parser, heartbeat, keying |

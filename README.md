@@ -155,6 +155,7 @@ sound card, which is the quickest way to see what the program does.
 ./m17web -r sim   -w 8080        # simulated radio - no hardware
 ./m17web -r pluto -w 8080        # PlutoSDR / Pluto+
 ./m17web -r lime  -w 8080        # LimeSDR
+./m17web -r cm108 -w 8080        # CM108/CM119 sound fob + the analogue board
 ```
 
 Then open `http://<pi-address>:8080/`.  Settings live in `config.txt` in the
@@ -164,7 +165,7 @@ from the page or the console.
 
 | option | meaning |
 |---|---|
-| `-r sim\|pluto\|lime` | radio backend |
+| `-r sim\|pluto\|lime\|feather\|feather-loop\|cm108` | radio backend |
 | `-w PORT` | web UI port (default 8080) |
 | `-p IP` | Pluto address (default `pluto.local`) |
 | `-a browser\|pulse\|both\|none\|file:IN:OUT` | audio backend (the whole pair; the interface sets the two routes instead) |

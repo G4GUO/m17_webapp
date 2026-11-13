@@ -105,6 +105,16 @@ else
 SRCS := $(filter-out audio_alsa.cpp,$(SRCS))
 endif
 
+# A CM108/CM119 sound fob back end (cm108*.cpp): the Feather's DSP chains with
+# real converters and GPIO3 for PTT, for the analogue board before the modem
+# firmware is proven.  Needs both the chains (FEATHER) and ALSA.
+ifeq ($(FEATHER)$(ALSA),11)
+CFLAGS   += -DHAVE_CM108
+CXXFLAGS += -DHAVE_CM108
+else
+SRCS := $(filter-out cm108.cpp cm108_alsa.cpp cm108_hid.cpp,$(SRCS))
+endif
+
 ifeq ($(PULSE),1)
 CFLAGS   += -DHAVE_PULSE
 CXXFLAGS += -DHAVE_PULSE
@@ -244,7 +254,7 @@ HDRS = $(wildcard *.h) $(GENERATED)
 $(OBJS): $(HDRS)
 
 # ---------------------------------------------------------------------------
-.PHONY: all sim console bitexact clean help assets feathertest
+.PHONY: all sim console bitexact clean help assets feathertest cm108test
 
 all: $(TARGET)
 
@@ -309,6 +319,14 @@ assets:
 
 # The Feather back end over a pty, with a fake board on the other end.  No
 # hardware, no SDR libraries, no codec2 state: just the wire and the seam.
+# The CM108 back end against a fake sound card: the keying order, ten frames a
+# symbol, and the symbols coming back, with no fob plugged in.
+cm108test: tests/cm108_test.cpp cm108.cpp feather_tx_chain.cpp feather_rx_chain.cpp \
+           m17_dsp.cpp m17_rx_sync.cpp
+	$(CXX) $(CXXFLAGS) -I. tests/cm108_test.cpp cm108.cpp \
+	       feather_tx_chain.cpp feather_rx_chain.cpp m17_dsp.cpp m17_rx_sync.cpp \
+	       -o cm108test $(LIBS)
+
 feathertest: tests/feather_test.cpp feather.cpp feather_link.c \
              feather_tx_chain.cpp feather_rx_chain.cpp m17_dsp.cpp m17_rx_sync.cpp
 	$(CC) $(CFLAGS) -c feather_link.c -o feather_link_test.o
@@ -318,7 +336,7 @@ feathertest: tests/feather_test.cpp feather.cpp feather_link.c \
 
 clean:
 	rm -f $(TARGET) *.o www_assets.h
-	rm -f tests/codec2_frame_stock tests/codec2_frame_mod feathertest feather_link_test.o
+	rm -f tests/codec2_frame_stock tests/codec2_frame_mod feathertest feather_link_test.o cm108test
 	rm -f codec2mod/*.o codec2mod/src/*.o
 	rm -f $(C2F_OBJS)
 

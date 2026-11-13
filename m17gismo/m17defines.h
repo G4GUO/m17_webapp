@@ -21,7 +21,10 @@ typedef enum{RADIO_TYPE_PLUTO,RADIO_TYPE_LIME,RADIO_TYPE_SIM,
              RADIO_TYPE_FEATHER,
              // The Feather's modulator and demodulator with no board attached:
              // baseband out, baseband straight back in.
-             RADIO_TYPE_FEATHER_LOOP}RadioType;
+             RADIO_TYPE_FEATHER_LOOP,
+             // A CM108/CM119 sound fob on the analogue board instead of the
+             // Feather: the same two chains, real converters, PTT on a GPIO.
+             RADIO_TYPE_CM108}RadioType;
 
 // Simulated radio (radio_sim.cpp), selected with -r sim
 const char *radio_name(void);
