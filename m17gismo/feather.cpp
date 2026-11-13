@@ -18,10 +18,15 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <math.h>
+#include <stdarg.h>
+
 #include "m17defines.h"
 #include "ui.h"
 #include "feather.h"
 #include "feather_link.h"
+#include "feather_tx_chain.h"
+#include "feather_rx_chain.h"
 
 #define FEATHER_CTL_MS     40u     // board times the host out at 100 ms
 #define FEATHER_READ_MAX   4096
@@ -282,6 +287,127 @@ void feather_close(void)
 bool feather_open_ok(void)
 {
     return m_fd >= 0;
+}
+
+// ---------------------------------------------------------------- loopback
+// Dibits in, baseband out, baseband straight back in, symbols out.  Both chains
+// are the ones the STM32F405 runs.
+static m17f::TxChain g_txc;
+static m17f::RxChain g_rxc;
+static bool    g_loop_ready;
+#define LOOP_REF_RMS 0.745f               // RMS of the four symbol amplitudes
+static float   g_loop_snr = -1.0f;        // dB against LOOP_REF_RMS; <0 = ideal
+static float   g_loop_stage[480];         // 10 ms at 48 kHz, as the board's DMA blocks
+static int     g_loop_stage_n;
+static FILE   *g_loop_dump;
+static uint32_t g_loop_samples, g_loop_syms;
+
+static void loop_pump(float s)
+{
+    float sym[256];
+    int n;
+
+    // The reference is fixed, not measured: the four symbol amplitudes are
+    // +1, +1/3, -1/3, -1, so their RMS is 0.745 and the RRC is normalised to
+    // unity at the symbol instant.  A running estimate was tried first and made
+    // the number meaningless - it is still settling during a one-second burst,
+    // so 4 dB came out worse than 2 dB.
+    if (g_loop_snr >= 0.0f) {
+        // Box-Muller is overkill for a dev mode; the sum of twelve uniforms is
+        // close enough to Gaussian and costs nothing.
+        float u = 0.0f;
+        for (int i = 0; i < 12; i++) u += (float)rand() / (float)RAND_MAX;
+        s += (u - 6.0f) * LOOP_REF_RMS * powf(10.0f, -g_loop_snr / 20.0f);
+    }
+
+    if (g_loop_dump) (void)fwrite(&s, sizeof(s), 1, g_loop_dump);
+    g_loop_samples++;
+
+    g_loop_stage[g_loop_stage_n++] = s;
+    if (g_loop_stage_n < (int)(sizeof(g_loop_stage) / sizeof(g_loop_stage[0]))) return;
+
+    n = g_rxc.process(g_loop_stage, g_loop_stage_n, sym,
+                      (int)(sizeof(sym) / sizeof(sym[0])));
+    g_loop_stage_n = 0;
+    if (n > 0) {
+        g_loop_syms += (uint32_t)n;
+        m17_rx_symbols(sym, n);
+    }
+}
+
+void feather_loop_open(void)
+{
+    if (g_loop_ready) return;
+
+    g_txc.init();
+    g_rxc.init();
+    g_loop_ready = true;
+    g_loop_stage_n = 0;
+    g_loop_samples = g_loop_syms = 0;
+    g_loop_snr = -1.0f;
+
+    if (getenv("FEATHER_LOOP_SNR"))
+        g_loop_snr = (float)atof(getenv("FEATHER_LOOP_SNR"));
+    if (getenv("FEATHER_LOOP_DUMP")) {
+        g_loop_dump = fopen(getenv("FEATHER_LOOP_DUMP"), "wb");
+        if (g_loop_dump) setvbuf(g_loop_dump, NULL, _IONBF, 0);   // nothing lost if killed
+        if (g_loop_dump == NULL)
+            gui_log_event("feather", "feather-loop: cannot write %s", getenv("FEATHER_LOOP_DUMP"));
+    }
+
+    if (g_loop_snr >= 0.0f) {
+        // Same channel every run unless the seed says otherwise, so that two
+        // runs of the same message compare.
+        srand(getenv("FEATHER_LOOP_SEED") ? atoi(getenv("FEATHER_LOOP_SEED")) : 1);
+        gui_log_event("feather", "feather-loop: the board's modem, no board, channel at %.1f dB SNR",
+                      (double)g_loop_snr);
+    } else {
+        gui_log_event("feather", "feather-loop: the board's modem, no board");
+    }
+}
+
+void feather_loop_tx_dibits(const uint8_t *dibits, int n)
+{
+    if (!g_loop_ready) feather_loop_open();
+
+    for (int i = 0; i < n; i++) {
+        g_txc.push(dibits[i]);
+        // 10 samples per symbol at 48 kHz, which is the rate the DAC is clocked at.
+        for (int k = 0; k < 10; k++) loop_pump(g_txc.next());
+    }
+}
+
+void feather_loop_idle(void)
+{
+    if (!g_loop_ready) return;
+
+    // The modulator holds up to 31 symbols in its filter, and the board's DAC
+    // keeps pulling them out whether or not there is anything new to send.  So
+    // do the same: with the transmitter idle, run the tail out.
+    while (g_txc.busy()) loop_pump(g_txc.next());
+
+    // ...and let the receiver's timing loop see the last few samples rather than
+    // holding them until another 10 ms has accumulated.
+    if (g_loop_stage_n > 0) {
+        float sym[256];
+        int n = g_rxc.process(g_loop_stage, g_loop_stage_n, sym,
+                              (int)(sizeof(sym) / sizeof(sym[0])));
+        g_loop_stage_n = 0;
+        if (n > 0) {
+            g_loop_syms += (uint32_t)n;
+            m17_rx_symbols(sym, n);
+        }
+    }
+}
+
+const char *feather_loop_status(void)
+{
+    static char buf[128];
+
+    snprintf(buf, sizeof(buf), "feather-loop: %u samples, %u symbols%s",
+             (unsigned)g_loop_samples, (unsigned)g_loop_syms,
+             g_loop_snr >= 0.0f ? ", noisy" : "");
+    return buf;
 }
 
 // ------------------------------------------------------------------- status

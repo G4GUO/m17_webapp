@@ -66,6 +66,14 @@ void command_line(int c, char **argv){
 				fprintf(stderr,"m17web: Feather support not compiled in\n");
 #endif
 			}
+			if(strcmp(argv[i+1],"feather-loop")==0){
+#ifdef HAVE_FEATHER
+				// The same modulator and demodulator code, wired to each other.
+				m_radio_type = RADIO_TYPE_FEATHER_LOOP;
+#else
+				fprintf(stderr,"m17web: Feather support not compiled in\n");
+#endif
+			}
 			if(strcmp(argv[i+1],"sim")==0){
 #ifdef HAVE_SIM
 				m_radio_type = RADIO_TYPE_SIM;
@@ -106,7 +114,7 @@ void command_line(int c, char **argv){
 		if(strcmp(argv[i],"-h")==0 || strcmp(argv[i],"--help")==0){
 			printf("m17web %s - M17 SDR with a web interface\n\n", VERSION);
 			printf("usage: m17web [options]\n\n");
-			printf("  -r pluto|lime|sim|feather\n"
+			printf("  -r pluto|lime|sim|feather|feather-loop\n"
 			       "                      radio back end (sim = no hardware, TX looped to RX;\n"
 			       "                      feather = an STM32F405 M17 modem on a serial port)\n");
 			printf("  -p xxx.xxx.xxx.xxx  IPv4 address of the Pluto (default: pluto.local)\n");

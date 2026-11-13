@@ -2,6 +2,9 @@
 #include <memory.h>
 #include <stdio.h>
 #include "m17defines.h"
+#ifdef HAVE_FEATHER
+#include "feather.h"
+#endif
 
 #define TX_FN 31
 static float *m_tx_c;
@@ -85,6 +88,20 @@ void m17_mod_flush(void){
 	}
 }
 void m17_mod_dibits(uint8_t *dibits, int len){
+#ifdef HAVE_FEATHER
+    // This, not m17_send_dibit_array(), is where every frame leaves: packet mode
+    // calls it directly (see m17_send_packet_frames), so guarding only the
+    // caller meant an SMS went out as a link setup followed by nothing at all.
+    // Dibits are all the board needs; it does its own RRC and its own DAC.
+    if( radio_get_type() == RADIO_TYPE_FEATHER ){
+        feather_tx_dibits( dibits, len );
+        return;
+    }
+    if( radio_get_type() == RADIO_TYPE_FEATHER_LOOP ){
+        feather_loop_tx_dibits( dibits, len );
+        return;
+    }
+#endif
     for( int i = 0; i < len; i++){
     	mod_filter(m_tx_lu[dibits[i]]);
     }

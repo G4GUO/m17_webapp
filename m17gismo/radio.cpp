@@ -7,11 +7,14 @@
 //   HAVE_PLUTO     Pluto / Pluto+ over libiio
 //   HAVE_LIME      LimeSDR over LimeSuite
 //   HAVE_SIM       simulated radio (no hardware, TX looped back into RX)
+//   HAVE_FEATHER   the STM32F405 modem over a serial port, and feather-loop,
+//                  the same modem with its baseband output wired to its own input
 //   HAVE_RPI_GPIO  Raspberry Pi GPIO PTT in/out
 //
 #include <math.h>
 #include <memory.h>
 #include <stdio.h>
+#include <time.h>
 #include "m17defines.h"
 
 #ifdef HAVE_SIM
@@ -84,7 +87,8 @@ const char *radio_name(void){
 	if( m_radio_type == RADIO_TYPE_SIM )   return "sim";
 #endif
 #ifdef HAVE_FEATHER
-	if( m_radio_type == RADIO_TYPE_FEATHER ) return "feather";
+	if( m_radio_type == RADIO_TYPE_FEATHER )      return "feather";
+	if( m_radio_type == RADIO_TYPE_FEATHER_LOOP ) return "feather-loop";
 #endif
 	return "none";
 }
@@ -138,6 +142,10 @@ int radio_open(RadioType type){
 			fprintf(stderr, "m17web: set FEATHER_TTY to the board's port (default %s)\n",
 			        FEATHER_DEFAULT_TTY);
 		}
+	}
+	if( m_radio_type == RADIO_TYPE_FEATHER_LOOP ){
+		feather_loop_open();
+		fprintf(stderr, "m17web: %s\n", feather_loop_status());
 	}
 #endif
 #ifdef HAVE_RPI_GPIO
@@ -233,6 +241,14 @@ void radio_duplex(void){
 // station could never see its own PTT line.
 //
 bool radio_keyed(void){
+#ifdef HAVE_FEATHER
+	// The Feather design has no PTT input pin - the host sends PTT down the link -
+	// so there is nothing here to read.  Falling through to m_keyed instead makes
+	// the hardware PTT monitor see the program's own keying as a pressed switch:
+	// it then calls m17_txrx_ptt_on() and the transmitter never unkeys.
+	if( m_radio_type == RADIO_TYPE_FEATHER )      return false;
+	if( m_radio_type == RADIO_TYPE_FEATHER_LOOP ) return false;
+#endif
 #ifdef HAVE_SIM
 	if( m_radio_type == RADIO_TYPE_SIM ) return sim_is_keyed();
 #endif
@@ -328,6 +344,16 @@ int radio_receive_samples( scmplx *s, uint32_t n){
 	// No samples from the Feather: the board already ran the discriminator and
 	// the symbol tracker, so there is nothing here to demodulate.
 	if( m_radio_type == RADIO_TYPE_FEATHER ) return 0;
+	// The loopback has no radio to wait on, so pace it: a block of N samples is
+	// 40 ms of air time, and the receive loop would otherwise spin flat out.
+	if( m_radio_type == RADIO_TYPE_FEATHER_LOOP ){
+		struct timespec ts;
+		feather_loop_idle();
+		ts.tv_sec  = 0;
+		ts.tv_nsec = (long)((double)n / 48000.0 * 1e9);
+		nanosleep(&ts, NULL);
+		return 0;
+	}
 #endif
 #ifdef HAVE_LIME
 	if( m_radio_type == RADIO_TYPE_LIME ){
@@ -368,6 +394,9 @@ void radio_rx_process( scmplx *s, int len){
 		feather_poll();
 		return;
 	}
+	// The loopback delivered its symbols while it was modulating; the samples in
+	// s[] are a placeholder so the receive loop keeps its shape.
+	if( m_radio_type == RADIO_TYPE_FEATHER_LOOP ) return;
 #endif
 	m17_dsp_rx( s, len );
 }

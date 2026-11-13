@@ -54,11 +54,6 @@ void m17_send_dibit_array(void){
 	// With a Feather the dibits are the output: the board does the 4FSK and the
 	// RRC.  Every frame in this program is built into m_tx_d[] and ends up here,
 	// so this is the whole transmit path.
-	if( radio_get_type() == RADIO_TYPE_FEATHER ){
-		feather_tx_dibits( m_tx_d, m_tx_l );
-		m_tx_l = 0;
-		return;
-	}
 #endif
 	m17_mod_dibits(m_tx_d, m_tx_l);
 	m_tx_l = 0;

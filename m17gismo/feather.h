@@ -49,6 +49,22 @@ void feather_tx_dibits(const uint8_t *dibits, int n);
 // gone wrong on the host side.
 const char *feather_status(void);
 
+// ------------------------------------------------------------------ loopback
+// The board's own modem, without the board: dibits are modulated to 48 kHz
+// deviation by feather_tx_chain and fed sample by sample into the front end of
+// feather_rx_chain, which hands symbols to m17_rx_symbols() exactly as the
+// Feather does over the cable.  -r feather-loop selects it.
+//
+// This is the honest way to exercise the firmware's DSP without hardware: the
+// code in the path is the code the STM32F405 runs, and a message that survives
+// the trip has been through the RRC, the discriminator and the timing loop.
+void feather_loop_open(void);
+void feather_loop_tx_dibits(const uint8_t *dibits, int n);
+// Called while receiving: drains the modulator's filter tail, which the board
+// does on its own because its DAC never stops asking for samples.
+void feather_loop_idle(void);
+const char *feather_loop_status(void);
+
 // How long since anything valid arrived.  The board times the host out after
 // 100 ms, so the host has to notice first.
 uint32_t feather_silent_ms(void);

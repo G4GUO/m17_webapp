@@ -309,10 +309,12 @@ assets:
 
 # The Feather back end over a pty, with a fake board on the other end.  No
 # hardware, no SDR libraries, no codec2 state: just the wire and the seam.
-feathertest: tests/feather_test.cpp feather.cpp feather_link.c
+feathertest: tests/feather_test.cpp feather.cpp feather_link.c \
+             feather_tx_chain.cpp feather_rx_chain.cpp m17_dsp.cpp m17_rx_sync.cpp
 	$(CC) $(CFLAGS) -c feather_link.c -o feather_link_test.o
-	$(CXX) $(CXXFLAGS) -I. tests/feather_test.cpp feather.cpp feather_link_test.o \
-	       -o feathertest $(LIBS)
+	$(CXX) $(CXXFLAGS) -I. tests/feather_test.cpp feather.cpp \
+	       feather_tx_chain.cpp feather_rx_chain.cpp m17_dsp.cpp m17_rx_sync.cpp \
+	       feather_link_test.o -o feathertest $(LIBS)
 
 clean:
 	rm -f $(TARGET) *.o www_assets.h

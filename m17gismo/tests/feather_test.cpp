@@ -45,6 +45,12 @@ void m17_rx_symbols(float *sym, int len)
 
 bool m17_rx_lock(void) { return g_lock; }
 
+// m17_dsp.cpp calls these; in the program they come from radio.cpp, which this
+// test does not link (it would drag in libiio and the rest).
+void  radio_afc(float mean) { (void)mean; }
+float radio_get_afc_delta(void) { return 0.0f; }
+bool  radio_get_afc_status(void) { return false; }
+
 // ui.h's log hook.  The real one goes to the console and the web UI; here it is
 // just another line of test output, which is where a "board connected" line is
 // actually useful.

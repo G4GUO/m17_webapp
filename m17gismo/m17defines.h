@@ -18,7 +18,10 @@
 #define DF5_FN 71
 
 typedef enum{RADIO_TYPE_PLUTO,RADIO_TYPE_LIME,RADIO_TYPE_SIM,
-             RADIO_TYPE_FEATHER}RadioType;
+             RADIO_TYPE_FEATHER,
+             // The Feather's modulator and demodulator with no board attached:
+             // baseband out, baseband straight back in.
+             RADIO_TYPE_FEATHER_LOOP}RadioType;
 
 // Simulated radio (radio_sim.cpp), selected with -r sim
 const char *radio_name(void);
@@ -257,6 +260,9 @@ int  radio_get_oversample(void);
 void m17_dsp_process_samples(short *buffer, int samplesRead);
 void m17_dsp_build_rrc_filter(float *filter, float rolloff, int ntaps, int samples_per_symbol);
 void m17_dsp_build_lpf_filter(float *filter, float bw, int ntaps);
+// Defined in m17_dsp.cpp but never declared here; the Feather's receive chain
+// window its low-pass the same way the program's own filters are windowed.
+void m17_dsp_apply_window(float *window, int N);
 void m17_dsp_float_to_short(float *in, int16_t *out, int len);
 
 void m17_dsp_init(void);
